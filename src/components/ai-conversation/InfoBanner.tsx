@@ -4,33 +4,61 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { colors, typography } from '@/theme/tokens';
 
 interface InfoBannerProps {
-  onDismiss: () => void;
+  onDismiss?: () => void;
+  progress?: number;
+  scale: number;
+  text: string;
+  top: number;
+  width: number;
 }
 
-export function InfoBanner({ onDismiss }: InfoBannerProps) {
+export function InfoBanner({
+  onDismiss,
+  progress,
+  scale,
+  text,
+  top,
+  width,
+}: InfoBannerProps) {
+  const percent = progress === undefined ? undefined : Math.round(progress * 100);
+
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { minHeight: 54 * scale, top, width }]}>
       <Image
         contentFit="contain"
         source={require('../../../assets/figma/info.svg')}
-        style={styles.infoIcon}
+        style={{ height: 24 * scale, width: 24 * scale }}
       />
-      <Text style={styles.text}>
-        Задайте вопрос голосом, или опишите текстом.
-      </Text>
-      <Pressable
-        accessibilityLabel="Закрыть подсказку"
-        accessibilityRole="button"
-        hitSlop={8}
-        onPress={onDismiss}
-        style={styles.closeButton}
-      >
-        <Image
-          contentFit="contain"
-          source={require('../../../assets/figma/clear.svg')}
-          style={styles.closeIcon}
-        />
-      </Pressable>
+      <View style={styles.body}>
+        <Text accessibilityLiveRegion={percent === undefined ? 'polite' : 'none'} style={styles.text}>
+          {text}
+        </Text>
+        {percent !== undefined && (
+          <View
+            accessibilityLabel="Подготовка модели речи"
+            accessibilityRole="progressbar"
+            accessibilityValue={{ min: 0, max: 100, now: percent }}
+            style={styles.progressTrack}
+          >
+            <View style={[styles.progressFill, { width: `${percent}%` }]} />
+          </View>
+        )}
+      </View>
+      {onDismiss && (
+        <Pressable
+          accessibilityLabel="Закрыть подсказку"
+          accessibilityRole="button"
+          hitSlop={8}
+          onPress={onDismiss}
+          style={[styles.closeButton, { height: 26 * scale, width: 26 * scale }]}
+        >
+          <Image
+            contentFit="contain"
+            source={require('../../../assets/figma/clear.svg')}
+            style={{ height: 18 * scale, width: 18 * scale }}
+          />
+        </Pressable>
+      )}
     </View>
   );
 }
@@ -42,33 +70,32 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     flexDirection: 'row',
     gap: 10,
-    height: 54,
     left: 16,
     paddingHorizontal: 16,
+    paddingVertical: 8,
     position: 'absolute',
-    top: 562,
-    width: 380,
   },
-  infoIcon: {
-    height: 24,
-    width: 24,
+  body: {
+    flex: 1,
+    gap: 6,
+    minWidth: 0,
   },
   text: {
-    color: colors.subtitle,
-    flex: 1,
-    minWidth: 0,
-    fontSize: typography.info.fontSize,
-    fontWeight: typography.info.fontWeight,
-    lineHeight: typography.info.lineHeight,
+    ...typography.info,
+    color: colors.white,
+  },
+  progressTrack: {
+    backgroundColor: colors.glassBorder,
+    borderRadius: 2,
+    height: 4,
+    overflow: 'hidden',
+  },
+  progressFill: {
+    backgroundColor: colors.buttonHighlight,
+    height: '100%',
   },
   closeButton: {
     alignItems: 'center',
-    height: 26,
     justifyContent: 'center',
-    width: 26,
-  },
-  closeIcon: {
-    height: 18,
-    width: 18,
   },
 });

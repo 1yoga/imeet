@@ -6,38 +6,44 @@ import { colors, typography } from '@/theme/tokens';
 
 interface ConversationButtonProps {
   accessibilityHint?: string;
-  iconSource: number;
+  disabled?: boolean;
+  iconSource?: number;
   label: string;
   onLongPress?: () => void;
   onPress: () => void;
+  variant?: 'primary' | 'secondary';
 }
 
 export function ConversationButton({
   accessibilityHint,
+  disabled = false,
   iconSource,
   label,
   onLongPress,
   onPress,
+  variant = 'primary',
 }: ConversationButtonProps) {
   return (
     <Pressable
       accessibilityHint={accessibilityHint}
       accessibilityRole="button"
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onLongPress={onLongPress}
       onPress={onPress}
-      style={({ pressed }) => [styles.pressable, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.pressable, pressed && styles.pressed, disabled && styles.disabled]}
     >
       <LinearGradient
-        colors={[colors.buttonHighlight, colors.primary]}
+        colors={variant === 'secondary'
+          ? [colors.glassFallbackTop, colors.glassFallbackBottom]
+          : [colors.buttonHighlight, colors.primary]}
         end={{ x: 1, y: 0.5 }}
         start={{ x: 0, y: 0.5 }}
         style={styles.gradient}
       >
-        <Image
-          contentFit="contain"
-          source={iconSource}
-          style={styles.icon}
-        />
+        {iconSource !== undefined && (
+          <Image contentFit="contain" source={iconSource} style={styles.icon} />
+        )}
         <Text style={styles.label}>{label}</Text>
         <View pointerEvents="none" style={styles.highlight} />
       </LinearGradient>
@@ -55,6 +61,9 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.82,
   },
+  disabled: {
+    opacity: 0.55,
+  },
   gradient: {
     alignItems: 'center',
     borderRadius: 100,
@@ -70,6 +79,7 @@ const styles = StyleSheet.create({
     width: 20,
   },
   label: {
+    fontFamily: typography.button.fontFamily,
     color: colors.white,
     fontSize: typography.button.fontSize,
     fontWeight: typography.button.fontWeight,

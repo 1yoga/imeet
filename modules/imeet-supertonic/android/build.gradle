@@ -1,0 +1,16 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.imeet.supertonic'
+version = '0.1.0'
+
+android {
+  namespace 'com.imeet.supertonic'
+}
+
+dependencies {
+  // Same Maven artifact as Naslukh. Gradle packages its JNI libraries once.
+  implementation 'com.github.k2-fsa.sherpa-onnx:sherpa-onnx:v1.13.5'
+}

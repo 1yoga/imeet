@@ -5,20 +5,59 @@
     "version": "0.1.0",
     "orientation": "portrait",
     "scheme": "imeet",
+    "icon": "./assets/icons/icon.png",
     "userInterfaceStyle": "automatic",
     "ios": {
       "bundleIdentifier": "com.imeet.app"
     },
     "android": {
-      "package": "com.imeet.app"
+      "package": "com.imeet.app",
+      "permissions": ["android.permission.RECORD_AUDIO"],
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/icons/adaptive-foreground.png",
+        "backgroundColor": "#07051E"
+      }
+    },
+    "web": {
+      "favicon": "./assets/icons/favicon.png"
     },
     "plugins": [
       "expo-router",
-      "expo-splash-screen"
+      "expo-splash-screen",
+      "expo-font",
+      "expo-dev-client",
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "extraMavenRepos": ["https://www.jitpack.io"]
+          }
+        }
+      ],
+      [
+        "expo-status-bar",
+        {
+          "style": "light"
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {
+        "asyncRoutes": {
+          "web": true
+        }
+      },
+      "expo-status-bar": {
+        "style": "light"
+      },
+      "eas": {
+        "projectId": "584fc849-d00e-4e61-b37f-cb1809f231ba"
+      }
+    },
+    "owner": "1yoga"
   }
 }

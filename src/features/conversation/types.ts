@@ -2,6 +2,7 @@ export type ConversationStatus =
   | 'idle'
   | 'preparing'
   | 'listening'
+  | 'user-speaking'
   | 'recognizing'
   | 'thinking'
   | 'speaking'

@@ -1,90 +1,64 @@
 import { LinearGradient } from 'expo-linear-gradient';
-import { useEffect, useRef } from 'react';
-import { StatusBar, StyleSheet, Text, View } from 'react-native';
+import { StatusBar } from 'expo-status-bar';
+import {
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  useWindowDimensions,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BottomTabBar } from '@/components/ai-conversation/BottomTabBar';
 import { ConversationButton } from '@/components/ai-conversation/ConversationButton';
 import { InfoBanner } from '@/components/ai-conversation/InfoBanner';
 import { VoiceWave } from '@/components/ai-conversation/VoiceWave';
-import type { ConversationStatus } from '@/features/conversation/types';
+import { useAndroidVoiceInput } from '@/features/conversation/useAndroidVoiceInput';
 import { useAppStore } from '@/store/app-store';
-import { colors, typography } from '@/theme/tokens';
+import { colors, layout, typography } from '@/theme/tokens';
 
-const busyStatuses: ConversationStatus[] = [
-  'preparing',
-  'listening',
-  'recognizing',
-  'thinking',
-  'speaking',
-];
+const ttsChoices = [
+  { value: 'system', label: 'Системный TTS' },
+  { value: 'supertonic', label: 'Supertonic 3 · F1' },
+] as const;
 
 export function AIConversationScreen() {
-  const status = useAppStore((state) => state.conversationStatus);
+  const voice = useAndroidVoiceInput();
+  const canStartVoice = !voice.isActive && voice.model.phase === 'ready'
+    && (voice.phase === 'idle' || voice.phase === 'error');
+  const canStopVoice = voice.phase === 'listening' || voice.phase === 'user-speaking';
+  const { height, width } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const scale = Math.min(
+    1,
+    width / layout.frameWidth,
+    height / layout.frameHeight,
+  );
+  const contentWidth = Math.max(0, width - layout.horizontalPadding * 2);
+  const titleTop = Math.max(layout.titleTop * scale, insets.top + 18 * scale);
+  const tabBarHeight = 84;
+  const spaceAboveTabs = height - insets.bottom - 24 * scale - tabBarHeight - 16 * scale;
+  const actionsTop = Math.min(layout.actionsTop * scale, spaceAboveTabs - 96);
+  const infoTop = actionsTop - 80;
+  const feedbackTop = titleTop + (voice.hasSupertonicTts ? 142 : 112);
+  const waveWidth = layout.waveWidth * scale;
+  const waveHeight = layout.waveHeight * scale;
+  const waveLeft =
+    (width - layout.frameWidth * scale) / 2 + layout.waveLeft * scale;
   const activeTab = useAppStore((state) => state.activeTab);
   const isInfoVisible = useAppStore((state) => state.isInfoVisible);
-  const setStatus = useAppStore((state) => state.setConversationStatus);
   const setActiveTab = useAppStore((state) => state.setActiveTab);
   const dismissInfo = useAppStore((state) => state.dismissInfo);
-  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-  useEffect(() => {
-    return () => {
-      timers.current.forEach(clearTimeout);
-    };
-  }, []);
-
-  const clearTimers = () => {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-  };
-
-  const runMockFlow = (flow: ConversationStatus[]) => {
-    clearTimers();
-    flow.forEach((nextStatus, index) => {
-      const timer = setTimeout(
-        () => setStatus(nextStatus),
-        index === 0 ? 0 : index * 650,
-      );
-      timers.current.push(timer);
-    });
-  };
-
-  const handleListen = () => {
-    if (busyStatuses.includes(status)) {
-      clearTimers();
-      setStatus('idle');
-      return;
-    }
-
-    runMockFlow([
-      'preparing',
-      'listening',
-      'recognizing',
-      'thinking',
-      'speaking',
-      'idle',
-    ]);
-  };
-
-  const handleSpeak = () => {
-    if (busyStatuses.includes(status)) {
-      clearTimers();
-      setStatus('idle');
-      return;
-    }
-
-    runMockFlow(['preparing', 'speaking', 'idle']);
-  };
-
-  const handleMockError = () => {
-    clearTimers();
-    setStatus('error');
-    timers.current.push(setTimeout(() => setStatus('idle'), 1400));
-  };
+  const showModel = voice.supported && (voice.model.phase !== 'ready' || (isInfoVisible && !voice.isActive));
+  const conversationHint = voice.hasTts
+    ? 'Пробный разговор по-русски со сценарными ответами.'
+    : 'Пробный разговор по-русски. В этой сборке ответы показываются текстом.';
+  const canChangeTts = !voice.isActive && (voice.phase === 'idle' || voice.phase === 'error');
 
   return (
     <View style={styles.screen}>
-      <StatusBar barStyle="light-content" />
+      <StatusBar style="light" />
       <LinearGradient
         colors={[colors.backgroundTop, colors.backgroundBottom]}
         end={{ x: 0.5, y: 1 }}
@@ -92,35 +66,115 @@ export function AIConversationScreen() {
         style={StyleSheet.absoluteFill}
       />
 
-      <View style={styles.textBlock}>
+      <View style={[styles.textBlock, { top: titleTop, width: contentWidth }]}>
         <Text style={styles.title}>Добрый день, Александр</Text>
         <Text style={styles.subtitle}>
-          Я помогу вам найти: любовь, друзей,{`\n`}
-          или просто хорошую компанию для похода{`\n`}
-          на выставку или в кино.
+          {voice.supported
+            ? conversationHint
+            : 'Голосовой ввод доступен в приложении для Android.'}
         </Text>
+        {voice.hasSupertonicTts && (
+          <View accessibilityRole="radiogroup" accessibilityLabel="Движок озвучки" style={styles.ttsChoices}>
+            {ttsChoices.map(({ value, label }) => {
+              const selected = voice.ttsChoice === value;
+              return (
+                <Pressable
+                  key={value}
+                  accessibilityRole="radio"
+                  accessibilityState={{ checked: selected, disabled: !canChangeTts }}
+                  disabled={!canChangeTts}
+                  onPress={() => voice.selectTts(value)}
+                  style={[styles.ttsChoice, selected && styles.ttsChoiceSelected]}
+                >
+                  <Text style={[styles.ttsLabel, selected && styles.ttsLabelSelected]}>{label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        )}
       </View>
 
-      <VoiceWave status={status} />
+      <VoiceWave
+        height={waveHeight}
+        left={waveLeft}
+        status={voice.status}
+        top={layout.waveTop * scale}
+        width={waveWidth}
+      />
 
-      {isInfoVisible && <InfoBanner onDismiss={dismissInfo} />}
+      {voice.supported && (voice.isActive || Boolean(voice.message || voice.transcript)) && (
+        <ScrollView
+          contentContainerStyle={styles.voiceFeedbackContent}
+          style={[
+            styles.voiceFeedback,
+            {
+              maxHeight: Math.max(0, (showModel ? infoTop : actionsTop) - feedbackTop - 12),
+              top: feedbackTop,
+              width: contentWidth,
+            },
+          ]}
+        >
+          {voice.isActive && (
+            <Text style={styles.voiceStatus}>Разговор активен</Text>
+          )}
+          {voice.message && (
+            <Text accessibilityLiveRegion="polite" style={styles.voiceMessage}>{voice.message}</Text>
+          )}
+          {voice.transcript !== '' && (
+            <View accessibilityLiveRegion="polite">
+              <Text style={styles.voiceMessage}>Ваша фраза</Text>
+              <Text selectable style={styles.transcript}>{voice.transcript}</Text>
+            </View>
+          )}
+          {voice.reply !== '' && (
+            <View>
+              <Text style={styles.voiceMessage}>Ответ iMeet</Text>
+              <Text selectable style={styles.transcript}>{voice.reply}</Text>
+            </View>
+          )}
+        </ScrollView>
+      )}
 
-      <View style={styles.actions}>
-        <ConversationButton
-          iconSource={require('../../../assets/figma/no-sound.svg')}
-          label="Не могу слушать"
-          onPress={handleListen}
+      {showModel && (
+        <InfoBanner
+          onDismiss={voice.model.phase === 'ready' ? dismissInfo : undefined}
+          progress={voice.model.phase === 'loading' ? voice.model.progress : undefined}
+          scale={scale}
+          text={voice.model.phase === 'ready' ? 'Модель речи готова.' : voice.model.message}
+          top={infoTop}
+          width={contentWidth}
         />
-        <ConversationButton
-          accessibilityHint="Нажмите и удерживайте для проверки состояния ошибки"
-          iconSource={require('../../../assets/figma/no-microphone.svg')}
-          label="Не могу говорить"
-          onLongPress={handleMockError}
-          onPress={handleSpeak}
-        />
-      </View>
+      )}
 
-      <BottomTabBar activeTab={activeTab} onTabChange={setActiveTab} />
+      {voice.supported && (
+        <View style={[styles.actions, { top: actionsTop, width: contentWidth }]}>
+          {voice.model.phase === 'error' ? (
+            <ConversationButton label="Повторить подготовку" onPress={voice.retryModel} />
+          ) : (
+            <ConversationButton
+              disabled={!canStartVoice && !canStopVoice}
+              label={voice.isActive ? 'Закончить фразу' : 'Начать общение'}
+              onPress={voice.isActive ? voice.stop : voice.start}
+            />
+          )}
+          {voice.isActive && (
+            <ConversationButton
+              accessibilityHint="Незавершённая фраза будет отброшена"
+              label="Завершить разговор"
+              onPress={voice.end}
+              variant="secondary"
+            />
+          )}
+        </View>
+      )}
+
+      <BottomTabBar
+        activeTab={activeTab}
+        bottomInset={insets.bottom + 24 * scale}
+        onTabChange={setActiveTab}
+        scale={scale}
+        width={contentWidth}
+      />
     </View>
   );
 }
@@ -134,27 +188,74 @@ const styles = StyleSheet.create({
   textBlock: {
     left: 16,
     position: 'absolute',
-    top: 70,
-    width: 380,
   },
   title: {
+    fontFamily: typography.title.fontFamily,
     color: colors.white,
     fontSize: typography.title.fontSize,
     fontWeight: typography.title.fontWeight,
     lineHeight: typography.title.lineHeight,
   },
   subtitle: {
+    fontFamily: typography.subtitle.fontFamily,
     color: colors.subtitle,
     fontSize: typography.subtitle.fontSize,
     fontWeight: typography.subtitle.fontWeight,
     lineHeight: typography.subtitle.lineHeight,
     marginTop: 4,
   },
+  ttsChoices: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 12,
+  },
+  ttsChoice: {
+    borderColor: colors.glassBorder,
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  ttsChoiceSelected: {
+    backgroundColor: colors.infoBackground,
+    borderColor: colors.buttonHighlight,
+  },
+  ttsLabel: {
+    ...typography.button,
+    color: colors.subtitle,
+  },
+  ttsLabelSelected: {
+    color: colors.white,
+  },
   actions: {
     gap: 8,
     left: 16,
     position: 'absolute',
-    top: 632,
-    width: 380,
+  },
+  voiceFeedback: {
+    backgroundColor: colors.backgroundBottom,
+    borderColor: colors.glassBorder,
+    borderRadius: 12,
+    borderWidth: 1,
+    left: layout.horizontalPadding,
+    position: 'absolute',
+  },
+  voiceFeedbackContent: {
+    gap: 8,
+    padding: 12,
+  },
+  voiceMessage: {
+    ...typography.info,
+    color: colors.subtitle,
+  },
+  voiceStatus: {
+    ...typography.button,
+    color: colors.buttonHighlight,
+  },
+  transcript: {
+    ...typography.subtitle,
+    color: colors.white,
+    marginTop: 4,
   },
 });

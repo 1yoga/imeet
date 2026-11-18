@@ -60,6 +60,8 @@ export interface TtsRequest {
 }
 
 export interface TtsPlaybackHandle {
+  /** Completes only when playback has ended or been interrupted. */
+  finished: Promise<'completed' | 'stopped'>;
   stop(): Promise<void>;
 }
 

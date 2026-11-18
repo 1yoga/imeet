@@ -1,14 +1,17 @@
-import { GlassView } from 'expo-glass-effect';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Image } from 'expo-image';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
+import { GlassSurface } from '@/components/ai-conversation/GlassSurface';
 import type { NavigationTab } from '@/features/conversation/types';
 import { colors, typography } from '@/theme/tokens';
 
 interface BottomTabBarProps {
   activeTab: NavigationTab;
+  bottomInset: number;
   onTabChange: (tab: NavigationTab) => void;
+  scale: number;
+  width: number;
 }
 
 const tabs: Array<{
@@ -33,16 +36,19 @@ const tabs: Array<{
   },
 ];
 
-export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
+export function BottomTabBar({
+  activeTab,
+  bottomInset,
+  onTabChange,
+  scale,
+  width,
+}: BottomTabBarProps) {
+  const tabWidth = Math.min(102 * scale, width / 3);
+
   return (
-    <View style={styles.container}>
-      <View style={styles.glassBar}>
-        <GlassView
-          colorScheme="dark"
-          glassEffectStyle="regular"
-          pointerEvents="none"
-          style={[StyleSheet.absoluteFill, styles.glassEffect]}
-        />
+    <View style={[styles.container, { bottom: bottomInset, width }]}>
+      <View style={[styles.glassBar, { borderRadius: 28 * scale, height: 52 * scale }]}>
+        <GlassSurface style={[styles.glassEffect, { borderRadius: 28 * scale }]} />
         {tabs.map((tab) => {
           const isActive = tab.key === activeTab;
 
@@ -52,22 +58,28 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
               accessibilityState={{ selected: isActive }}
               key={tab.key}
               onPress={() => onTabChange(tab.key)}
-              style={styles.tab}
+              style={[styles.tab, { height: 48 * scale, width: tabWidth }]}
             >
               {isActive && (
                 <LinearGradient
                   colors={[colors.buttonHighlight, colors.primary]}
                   end={{ x: 1, y: 0.5 }}
                   start={{ x: 0, y: 0.5 }}
-                  style={styles.selection}
+                  style={[styles.selection, { borderRadius: 100 * scale }]}
                 />
               )}
               <Image
                 contentFit="contain"
                 source={tab.source}
-                style={styles.icon}
+                style={[styles.icon, { height: 18 * scale, width: 18 * scale }]}
               />
-              <Text style={[styles.label, isActive && styles.activeLabel]}>
+              <Text
+                style={[
+                  styles.label,
+                  { fontSize: Math.max(9, 10 * scale), width: tabWidth },
+                  isActive && styles.activeLabel,
+                ]}
+              >
                 {tab.label}
               </Text>
             </Pressable>
@@ -80,21 +92,17 @@ export function BottomTabBar({ activeTab, onTabChange }: BottomTabBarProps) {
 
 const styles = StyleSheet.create({
   container: {
-    bottom: 24,
-    height: 84,
     left: 16,
+    height: 84,
     paddingTop: 12,
     position: 'absolute',
-    width: 380,
   },
   glassBar: {
     alignItems: 'center',
     backgroundColor: colors.glassBackground,
     borderColor: colors.glassBorder,
-    borderRadius: 28,
     borderWidth: 1,
     flexDirection: 'row',
-    height: 52,
     justifyContent: 'space-between',
     overflow: 'hidden',
     paddingHorizontal: 2,
@@ -106,12 +114,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     alignSelf: 'stretch',
     gap: 1,
-    height: 48,
     justifyContent: 'center',
     minWidth: 0,
     paddingHorizontal: 8,
     paddingVertical: 6,
-    width: 102,
   },
   selection: {
     borderRadius: 100,
@@ -122,18 +128,16 @@ const styles = StyleSheet.create({
     top: 2,
   },
   icon: {
-    height: 18,
-    width: 18,
     zIndex: 1,
   },
   label: {
     color: colors.subtitle,
     flexShrink: 1,
+    fontFamily: typography.tab.fontFamily,
     fontSize: typography.tab.fontSize,
     fontWeight: typography.tab.fontWeight,
     lineHeight: typography.tab.lineHeight,
     textAlign: 'center',
-    width: 102,
     zIndex: 1,
   },
   activeLabel: {
