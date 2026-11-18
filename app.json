@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.imeet.app",
+      "versionCode": 2,
       "permissions": ["android.permission.RECORD_AUDIO"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/icons/adaptive-foreground.png",
@@ -30,7 +31,11 @@
         "expo-build-properties",
         {
           "android": {
-            "extraMavenRepos": ["https://www.jitpack.io"]
+            "extraMavenRepos": ["https://www.jitpack.io"],
+            "buildArchs": ["arm64-v8a"],
+            "enableMinifyInReleaseBuilds": true,
+            "enableShrinkResourcesInReleaseBuilds": true,
+            "enableBundleCompression": true
           }
         }
       ],

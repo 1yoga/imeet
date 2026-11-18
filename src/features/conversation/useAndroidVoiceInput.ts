@@ -8,7 +8,7 @@ import { AppState, PermissionsAndroid, Platform } from 'react-native';
 
 import { hasAndroidTts, loadAndroidTts } from '@/core/voice/androidTts';
 import type { TtsEngine, TtsPlaybackHandle } from '@/core/voice/contracts';
-import { hasSupertonicTts, loadSupertonicTts } from '@/core/voice/supertonicTts';
+import { hasSupertonicTts, loadSupertonicTts, prefetchSupertonicModel } from '@/core/voice/supertonicTts';
 
 import { mockConversationService } from './mockConversationService';
 import type { ConversationStatus } from './types';
@@ -105,6 +105,10 @@ export function useAndroidVoiceInput() {
     ? { phase: 'ready' }
     : { phase: 'loading', message: 'Проверяем модель речи…' });
   const [modelRetry, setModelRetry] = useState(0);
+  const [ttsModel, setTtsModel] = useState<ModelState>(hasSupertonicTts
+    ? { phase: 'loading', message: 'Проверяем модель Supertonic…' }
+    : { phase: 'ready' });
+  const [ttsModelRetry, setTtsModelRetry] = useState(0);
   const [isActive, setActive] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>({ phase: 'idle' });
   const [transcript, setTranscript] = useState('');
@@ -154,6 +158,29 @@ export function useAndroidVoiceInput() {
 
     return stopObserving;
   }, [modelRetry]);
+
+  useEffect(() => {
+    if (!hasSupertonicTts) return;
+    let observing = true;
+    setTtsModel({ phase: 'loading', message: 'Проверяем модель Supertonic…' });
+    void prefetchSupertonicModel(({ receivedBytes, totalBytes }) => {
+      if (!observing) return;
+      const mib = 1024 * 1024;
+      setTtsModel({
+        phase: 'loading',
+        message: `Скачиваем Supertonic… ${Math.floor(receivedBytes / mib)} из ${Math.ceil(totalBytes / mib)} МиБ`,
+        progress: totalBytes > 0 ? receivedBytes / totalBytes : undefined,
+      });
+    }).then(() => {
+      if (observing) setTtsModel({ phase: 'ready' });
+    }).catch(() => {
+      if (observing) setTtsModel({
+        phase: 'error',
+        message: 'Не удалось подготовить Supertonic. Проверьте интернет и свободное место или выберите системный голос.',
+      });
+    });
+    return () => { observing = false; };
+  }, [ttsModelRetry]);
 
   const end = useCallback(() => {
     const session = current.current;
@@ -261,7 +288,7 @@ export function useAndroidVoiceInput() {
           if (phase === 'asr' && turn.phase !== 'recognizing') {
             update('recognizing', 'Распознаём фразу…');
           } else if (phase === 'listen') {
-            if (turn.phase === 'preparing') update('listening', 'Говорите. Пауза в три секунды завершит фразу.');
+            if (turn.phase === 'preparing') update('listening', 'Говорите. Пауза в 2,5 секунды завершит фразу.');
             if (turn.phase === 'listening' && message === 'Речь обнаружена') {
               update('user-speaking', 'Слушаем…');
             }
@@ -273,7 +300,7 @@ export function useAndroidVoiceInput() {
           text = (await speech.listenOnce({
             language: 'ru',
             vadThreshold: 0.5,
-            vadMinSilenceSec: 3.0,
+            vadMinSilenceSec: 2.5,
           })).text.trim();
         } finally {
           unsubscribe();
@@ -369,6 +396,7 @@ export function useAndroidVoiceInput() {
   const { phase, message } = feedback;
   const status: ConversationStatus = phase === 'ending' || phase === 'stopping' ? 'recognizing' : phase;
   const retryModel = () => setModelRetry((value) => value + 1);
+  const retryTtsModel = () => setTtsModelRetry((value) => value + 1);
   const selectTts = (choice: TtsChoice) => {
     if (!current.current && (choice === 'system' || hasSupertonicTts)) {
       setTtsChoice(choice);
@@ -384,6 +412,8 @@ export function useAndroidVoiceInput() {
     selectTts,
     model,
     retryModel,
+    ttsModel,
+    retryTtsModel,
     isActive,
     phase,
     status,

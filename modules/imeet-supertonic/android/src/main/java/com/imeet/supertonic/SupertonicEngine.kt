@@ -46,6 +46,10 @@ internal class SupertonicEngine {
   private var engine: OfflineTts? = null
   private var baselinePssKb = 0
 
+  fun prefetchModel(baseDir: File, operation: SupertonicOperation, progress: (Long, Long) -> Unit) {
+    SupertonicModel.ensure(baseDir, operation, progress)
+  }
+
   fun initialize(baseDir: File, operation: SupertonicOperation, progress: (Long, Long) -> Unit) {
     if (engine != null) return
     val cacheStarted = SystemClock.elapsedRealtime()

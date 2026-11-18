@@ -15,6 +15,19 @@ class IMeetSupertonicModule : Module() {
     Name("IMeetSupertonic")
     Events("onModelProgress")
 
+    AsyncFunction("prefetchModel") { promise: Promise ->
+      val directory = checkNotNull(appContext.reactContext).noBackupFilesDir
+      runOperation(promise) { operation ->
+        engine.prefetchModel(directory, operation) { received, total ->
+          if (!operation.cancelled) sendEvent("onModelProgress", mapOf(
+            "receivedBytes" to received,
+            "totalBytes" to total,
+          ))
+        }
+        null
+      }
+    }
+
     AsyncFunction("initialize") { promise: Promise ->
       val directory = checkNotNull(appContext.reactContext).noBackupFilesDir
       runOperation(promise) { operation ->

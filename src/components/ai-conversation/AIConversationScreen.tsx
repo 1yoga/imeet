@@ -1,4 +1,5 @@
 import { LinearGradient } from 'expo-linear-gradient';
+import { useKeepAwake } from 'expo-keep-awake';
 import { StatusBar } from 'expo-status-bar';
 import {
   Pressable,
@@ -24,8 +25,10 @@ const ttsChoices = [
 ] as const;
 
 export function AIConversationScreen() {
+  useKeepAwake();
   const voice = useAndroidVoiceInput();
   const canStartVoice = !voice.isActive && voice.model.phase === 'ready'
+    && (voice.ttsChoice === 'system' || voice.ttsModel.phase === 'ready')
     && (voice.phase === 'idle' || voice.phase === 'error');
   const canStopVoice = voice.phase === 'listening' || voice.phase === 'user-speaking';
   const { height, width } = useWindowDimensions();
@@ -41,16 +44,23 @@ export function AIConversationScreen() {
   const spaceAboveTabs = height - insets.bottom - 24 * scale - tabBarHeight - 16 * scale;
   const actionsTop = Math.min(layout.actionsTop * scale, spaceAboveTabs - 96);
   const infoTop = actionsTop - 80;
-  const feedbackTop = titleTop + (voice.hasSupertonicTts ? 142 : 112);
-  const waveWidth = layout.waveWidth * scale;
+  const waveTop = layout.waveTop * scale;
   const waveHeight = layout.waveHeight * scale;
+  const waveBottom = waveTop + waveHeight;
+  const statusTop = titleTop + (voice.hasSupertonicTts ? 142 : 112);
+  const transcriptTop = waveBottom + 30;
+  const waveWidth = layout.waveWidth * scale;
   const waveLeft =
     (width - layout.frameWidth * scale) / 2 + layout.waveLeft * scale;
   const activeTab = useAppStore((state) => state.activeTab);
-  const isInfoVisible = useAppStore((state) => state.isInfoVisible);
   const setActiveTab = useAppStore((state) => state.setActiveTab);
-  const dismissInfo = useAppStore((state) => state.dismissInfo);
-  const showModel = voice.supported && (voice.model.phase !== 'ready' || (isInfoVisible && !voice.isActive));
+  const preparation = voice.model.phase !== 'ready' ? voice.model : voice.ttsModel;
+  const retryPreparation = voice.model.phase === 'error'
+    ? voice.retryModel
+    : voice.ttsChoice === 'supertonic' && voice.ttsModel.phase === 'error'
+      ? voice.retryTtsModel
+      : undefined;
+  const showModel = voice.supported && preparation.phase !== 'ready';
   const conversationHint = voice.hasTts
     ? 'Пробный разговор по-русски со сценарными ответами.'
     : 'Пробный разговор по-русски. В этой сборке ответы показываются текстом.';
@@ -98,28 +108,29 @@ export function AIConversationScreen() {
         height={waveHeight}
         left={waveLeft}
         status={voice.status}
-        top={layout.waveTop * scale}
+        top={waveTop}
         width={waveWidth}
       />
 
-      {voice.supported && (voice.isActive || Boolean(voice.message || voice.transcript)) && (
+      {voice.supported && (voice.isActive || Boolean(voice.message)) && (
+        <View style={[styles.voiceStatusBox, { top: statusTop, width: contentWidth, maxHeight: Math.max(0, waveTop - statusTop - 12) }]}>
+          {voice.isActive && <Text style={styles.voiceStatus}>Разговор активен</Text>}
+          {voice.message && <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.voiceMessage}>{voice.message}</Text>}
+        </View>
+      )}
+
+      {voice.supported && Boolean(voice.transcript || voice.reply) && (
         <ScrollView
           contentContainerStyle={styles.voiceFeedbackContent}
           style={[
             styles.voiceFeedback,
             {
-              maxHeight: Math.max(0, (showModel ? infoTop : actionsTop) - feedbackTop - 12),
-              top: feedbackTop,
+              maxHeight: Math.max(0, actionsTop - transcriptTop - 12),
+              top: transcriptTop,
               width: contentWidth,
             },
           ]}
         >
-          {voice.isActive && (
-            <Text style={styles.voiceStatus}>Разговор активен</Text>
-          )}
-          {voice.message && (
-            <Text accessibilityLiveRegion="polite" style={styles.voiceMessage}>{voice.message}</Text>
-          )}
           {voice.transcript !== '' && (
             <View accessibilityLiveRegion="polite">
               <Text style={styles.voiceMessage}>Ваша фраза</Text>
@@ -137,10 +148,9 @@ export function AIConversationScreen() {
 
       {showModel && (
         <InfoBanner
-          onDismiss={voice.model.phase === 'ready' ? dismissInfo : undefined}
-          progress={voice.model.phase === 'loading' ? voice.model.progress : undefined}
+          progress={preparation.phase === 'loading' ? preparation.progress : undefined}
           scale={scale}
-          text={voice.model.phase === 'ready' ? 'Модель речи готова.' : voice.model.message}
+          text={preparation.message}
           top={infoTop}
           width={contentWidth}
         />
@@ -148,8 +158,8 @@ export function AIConversationScreen() {
 
       {voice.supported && (
         <View style={[styles.actions, { top: actionsTop, width: contentWidth }]}>
-          {voice.model.phase === 'error' ? (
-            <ConversationButton label="Повторить подготовку" onPress={voice.retryModel} />
+          {retryPreparation ? (
+            <ConversationButton label="Повторить подготовку" onPress={retryPreparation} />
           ) : (
             <ConversationButton
               disabled={!canStartVoice && !canStopVoice}
@@ -238,6 +248,10 @@ const styles = StyleSheet.create({
     borderColor: colors.glassBorder,
     borderRadius: 12,
     borderWidth: 1,
+    left: layout.horizontalPadding,
+    position: 'absolute',
+  },
+  voiceStatusBox: {
     left: layout.horizontalPadding,
     position: 'absolute',
   },
