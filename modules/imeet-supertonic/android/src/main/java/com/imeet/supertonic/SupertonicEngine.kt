@@ -85,17 +85,24 @@ internal class SupertonicEngine {
       "pssAfterInitKb=$initPssKb initPssDeltaKb=${initPssKb - baselinePssKb}")
   }
 
-  fun play(text: String, speed: Float, operation: SupertonicOperation): String {
+  fun play(
+    text: String,
+    speed: Float,
+    voiceId: Int,
+    operation: SupertonicOperation,
+    onMetrics: (Long, Long) -> Unit,
+  ): String {
     if (operation.cancelled) return "stopped"
     require(text.isNotBlank() && text.length <= 500) { "Supertonic: ожидается короткая фраза" }
     require(speed in 0.5f..2f) { "Supertonic: недопустимая скорость" }
+    require(voiceId in 0..9) { "Supertonic: неизвестный голос" }
     val instance = checkNotNull(engine) { "Supertonic не инициализирован" }
     val synthesisStarted = SystemClock.elapsedRealtime()
     // v1.13.5 looks up a concrete Kotlin callback signature that is not stable across compilers.
     // Discard a cancelled inference before creating an AudioTrack.
     val audio = instance.generateWithConfig(
       text,
-      GenerationConfig(sid = 0, speed = speed, numSteps = 8, extra = mapOf("lang" to "ru")),
+      GenerationConfig(sid = voiceId, speed = speed, numSteps = 8, extra = mapOf("lang" to "ru")),
     )
     val synthesisMs = SystemClock.elapsedRealtime() - synthesisStarted
     if (operation.cancelled) return "stopped"
@@ -131,7 +138,9 @@ internal class SupertonicEngine {
           val firstFrameMs = SystemClock.elapsedRealtime() - operation.requestedAt
           val firstFrameEpochMs = System.currentTimeMillis()
           val playbackPssKb = pssKb()
-          Log.i(TAG, "voice=F1 synthesisMs=$synthesisMs firstFrameMs=$firstFrameMs audioMs=$audioMs " +
+          onMetrics(synthesisMs, firstFrameMs)
+          val voiceName = if (voiceId < 5) "F${voiceId + 1}" else "M${voiceId - 4}"
+          Log.i(TAG, "voice=$voiceName synthesisMs=$synthesisMs firstFrameMs=$firstFrameMs audioMs=$audioMs " +
             "firstFrameEpochMs=$firstFrameEpochMs " +
             "pssWithAudioKb=$playbackPssKb playbackPssDeltaKb=${playbackPssKb - baselinePssKb}")
         }

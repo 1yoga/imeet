@@ -65,6 +65,7 @@ export async function loadAndroidTts(): Promise<TtsEngine | null> {
           language: request.locale?.split('-')[0] ?? 'ru',
           rate: request.speed,
           voice: request.voice ?? russianVoice,
+          onStart: request.onStart,
           onDone: () => settle('completed'),
           onStopped: () => settle('stopped'),
           onError,

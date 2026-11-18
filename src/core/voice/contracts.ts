@@ -57,6 +57,7 @@ export interface TtsRequest {
   voice?: string;
   locale?: string;
   speed?: number;
+  onStart?: () => void;
 }
 
 export interface TtsPlaybackHandle {

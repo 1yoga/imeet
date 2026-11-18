@@ -1,5 +1,6 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useKeepAwake } from 'expo-keep-awake';
+import { router, type Href } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import {
   Pressable,
@@ -101,6 +102,11 @@ export function AIConversationScreen() {
               );
             })}
           </View>
+        )}
+        {canChangeTts && (
+          <Pressable accessibilityRole="button" onPress={() => router.push('/voice-lab' as Href)} style={styles.voiceLabLink}>
+            <Text style={styles.voiceLabLinkText}>Открыть Voice Lab →</Text>
+          </Pressable>
         )}
       </View>
 
@@ -219,6 +225,15 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
     gap: 8,
     marginTop: 12,
+  },
+  voiceLabLink: {
+    alignSelf: 'flex-start',
+    marginTop: 10,
+    paddingVertical: 6,
+  },
+  voiceLabLinkText: {
+    color: colors.buttonHighlight,
+    fontSize: 14,
   },
   ttsChoice: {
     borderColor: colors.glassBorder,

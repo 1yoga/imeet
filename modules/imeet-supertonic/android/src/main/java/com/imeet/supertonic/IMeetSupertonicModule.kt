@@ -13,7 +13,7 @@ class IMeetSupertonicModule : Module() {
 
   override fun definition() = ModuleDefinition {
     Name("IMeetSupertonic")
-    Events("onModelProgress")
+    Events("onModelProgress", "onPlaybackMetrics")
 
     AsyncFunction("prefetchModel") { promise: Promise ->
       val directory = checkNotNull(appContext.reactContext).noBackupFilesDir
@@ -42,7 +42,21 @@ class IMeetSupertonicModule : Module() {
     }
 
     AsyncFunction("play") { text: String, speed: Double, promise: Promise ->
-      runOperation(promise) { operation -> engine.play(text, speed.toFloat(), operation) }
+      runOperation(promise) { operation ->
+        engine.play(text, speed.toFloat(), 0, operation) { _, _ -> }
+      }
+    }
+
+    AsyncFunction("playVoice") { text: String, speed: Double, voiceId: Int, requestId: Int, promise: Promise ->
+      runOperation(promise) { operation ->
+        engine.play(text, speed.toFloat(), voiceId, operation) { synthesisMs, firstFrameMs ->
+          sendEvent("onPlaybackMetrics", mapOf(
+            "requestId" to requestId,
+            "synthesisMs" to synthesisMs,
+            "firstFrameMs" to firstFrameMs,
+          ))
+        }
+      }
     }
 
     AsyncFunction("stop") {

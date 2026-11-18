@@ -8,13 +8,30 @@ interface ModelProgress {
   totalBytes: number;
 }
 
+export interface PlaybackMetrics {
+  requestId: number;
+  synthesisMs: number;
+  firstFrameMs: number;
+}
+
+export const supertonicVoices = [
+  { name: 'F1', id: 0 }, { name: 'F2', id: 1 }, { name: 'F3', id: 2 },
+  { name: 'F4', id: 3 }, { name: 'F5', id: 4 }, { name: 'M1', id: 5 },
+  { name: 'M2', id: 6 }, { name: 'M3', id: 7 }, { name: 'M4', id: 8 },
+  { name: 'M5', id: 9 },
+] as const;
+
+export type SupertonicVoiceName = (typeof supertonicVoices)[number]['name'];
+
 interface SupertonicModule {
   prefetchModel(): Promise<void>;
   initialize(): Promise<void>;
   play(text: string, speed: number): Promise<'completed' | 'stopped'>;
+  playVoice(text: string, speed: number, voiceId: number, requestId: number): Promise<'completed' | 'stopped'>;
   stop(): Promise<void>;
   dispose(): Promise<void>;
   addListener(event: 'onModelProgress', listener: (progress: ModelProgress) => void): { remove(): void };
+  addListener(event: 'onPlaybackMetrics', listener: (metrics: PlaybackMetrics) => void): { remove(): void };
 }
 
 const native = Platform.OS === 'android'
@@ -35,6 +52,44 @@ export function prefetchSupertonicModel(onProgress: (progress: ModelProgress) =>
     .then(() => { modelCached = true; })
     .finally(() => { modelPrefetch = undefined; });
   return modelPrefetch.finally(() => subscription.remove());
+}
+
+export async function initializeSupertonicForLab(onProgress: (progress: ModelProgress) => void) {
+  if (!native) throw new Error('Supertonic доступен только в Android APK с нативным модулем');
+  await modelPrefetch;
+  const subscription = native.addListener('onModelProgress', onProgress);
+  try {
+    await native.initialize();
+  } finally {
+    subscription.remove();
+  }
+}
+
+export async function playSupertonicVoice(
+  text: string,
+  voice: SupertonicVoiceName,
+  requestId: number,
+  onMetrics: (metrics: PlaybackMetrics) => void,
+) {
+  if (!native) throw new Error('Supertonic недоступен');
+  const voiceId = supertonicVoices.find(({ name }) => name === voice)?.id;
+  if (voiceId === undefined) throw new Error('Неизвестный голос Supertonic');
+  const subscription = native.addListener('onPlaybackMetrics', (metrics) => {
+    if (metrics.requestId === requestId) onMetrics(metrics);
+  });
+  try {
+    return await native.playVoice(text, 1, voiceId, requestId);
+  } finally {
+    subscription.remove();
+  }
+}
+
+export async function stopSupertonicVoice() {
+  await native?.stop();
+}
+
+export async function disposeSupertonicLab() {
+  await native?.dispose();
 }
 
 export function loadSupertonicTts(onProgress: (progress: ModelProgress) => void): TtsEngine {
