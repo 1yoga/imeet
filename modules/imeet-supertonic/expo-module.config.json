@@ -1,6 +1,6 @@
 {
   "platforms": ["android"],
   "android": {
-    "modules": ["com.imeet.supertonic.IMeetSupertonicModule"]
+    "modules": ["com.imeet.supertonic.IMeetSupertonicModule", "com.imeet.supertonic.IMeetDeviceTtsModule"]
   }
 }

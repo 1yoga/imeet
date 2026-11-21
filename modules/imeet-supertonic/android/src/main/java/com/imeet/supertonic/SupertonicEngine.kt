@@ -44,7 +44,23 @@ internal class SupertonicOperation {
 
 internal class SupertonicEngine {
   private var engine: OfflineTts? = null
+  private var dictionary: SupertonicAccentDictionary? = null
   private var baselinePssKb = 0
+
+  fun enableDictionary(baseDir: File, operation: SupertonicOperation, progress: (Long, Long) -> Unit) {
+    if (dictionary != null) return
+    val file = SupertonicAccentDictionary.ensure(baseDir, operation, progress)
+    operation.check()
+    dictionary = SupertonicAccentDictionary.open(file)
+    Log.i(TAG, "Russian accent dictionary enabled; pssKb=${pssKb()}")
+  }
+
+  fun disableDictionary() {
+    dictionary?.close()
+    dictionary = null
+  }
+
+  fun isDictionaryEnabled() = dictionary != null
 
   fun prefetchModel(baseDir: File, operation: SupertonicOperation, progress: (Long, Long) -> Unit) {
     SupertonicModel.ensure(baseDir, operation, progress)
@@ -90,18 +106,23 @@ internal class SupertonicEngine {
     speed: Float,
     voiceId: Int,
     operation: SupertonicOperation,
-    onMetrics: (Long, Long) -> Unit,
+    onMetrics: (Long, Long, Long, Int) -> Unit,
   ): String {
     if (operation.cancelled) return "stopped"
     require(text.isNotBlank() && text.length <= 500) { "Supertonic: ожидается короткая фраза" }
     require(speed in 0.5f..2f) { "Supertonic: недопустимая скорость" }
     require(voiceId in 0..9) { "Supertonic: неизвестный голос" }
     val instance = checkNotNull(engine) { "Supertonic не инициализирован" }
+    val dictionaryStarted = SystemClock.elapsedRealtime()
+    val prepared = dictionary?.apply(text)
+    val preparedText = prepared?.text ?: text
+    val dictionaryMs = SystemClock.elapsedRealtime() - dictionaryStarted
+    operation.check()
     val synthesisStarted = SystemClock.elapsedRealtime()
     // v1.13.5 looks up a concrete Kotlin callback signature that is not stable across compilers.
     // Discard a cancelled inference before creating an AudioTrack.
     val audio = instance.generateWithConfig(
-      text,
+      preparedText,
       GenerationConfig(sid = voiceId, speed = speed, numSteps = 8, extra = mapOf("lang" to "ru")),
     )
     val synthesisMs = SystemClock.elapsedRealtime() - synthesisStarted
@@ -138,9 +159,10 @@ internal class SupertonicEngine {
           val firstFrameMs = SystemClock.elapsedRealtime() - operation.requestedAt
           val firstFrameEpochMs = System.currentTimeMillis()
           val playbackPssKb = pssKb()
-          onMetrics(synthesisMs, firstFrameMs)
+          onMetrics(synthesisMs, firstFrameMs, dictionaryMs, prepared?.replacements ?: 0)
           val voiceName = if (voiceId < 5) "F${voiceId + 1}" else "M${voiceId - 4}"
-          Log.i(TAG, "voice=$voiceName synthesisMs=$synthesisMs firstFrameMs=$firstFrameMs audioMs=$audioMs " +
+          Log.i(TAG, "voice=$voiceName dictionaryMs=$dictionaryMs stressReplacements=${prepared?.replacements ?: 0} " +
+            "synthesisMs=$synthesisMs firstFrameMs=$firstFrameMs audioMs=$audioMs " +
             "firstFrameEpochMs=$firstFrameEpochMs " +
             "pssWithAudioKb=$playbackPssKb playbackPssDeltaKb=${playbackPssKb - baselinePssKb}")
         }
@@ -157,6 +179,7 @@ internal class SupertonicEngine {
   fun release() {
     engine?.release()
     engine = null
+    disableDictionary()
   }
 
   private fun pssKb() = Debug.MemoryInfo().also(Debug::getMemoryInfo).totalPss

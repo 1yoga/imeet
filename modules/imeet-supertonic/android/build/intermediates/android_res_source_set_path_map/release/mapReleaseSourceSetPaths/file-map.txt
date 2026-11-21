@@ -1,0 +1,9 @@
+com.imeet.supertonic.imeet-supertonic-pngs-0 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\build\generated\res\pngs\release
+com.imeet.supertonic.imeet-supertonic-updated_navigation_xml-1 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\build\generated\updated_navigation_xml\release
+com.imeet.supertonic.imeet-supertonic-mergeReleaseResources-2 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\build\intermediates\incremental\release\mergeReleaseResources\merged.dir
+com.imeet.supertonic.imeet-supertonic-mergeReleaseResources-3 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\build\intermediates\incremental\release\mergeReleaseResources\stripped.dir
+com.imeet.supertonic.imeet-supertonic-release-4 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\build\intermediates\merged_res\release\mergeReleaseResources
+com.imeet.supertonic.imeet-supertonic-release-5 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\build\intermediates\packaged_res\release\packageReleaseResources
+com.imeet.supertonic.imeet-supertonic-main-6 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\res
+com.imeet.supertonic.imeet-supertonic-release-7 D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\release\res
+gradleHome-0 C:\Users\user\.gradle

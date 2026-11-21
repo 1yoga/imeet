@@ -1,0 +1,24 @@
+-- Merging decision tree log ---
+manifest
+ADDED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml:1:1-7:12
+INJECTED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml:1:1-7:12
+	package
+		INJECTED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml
+	xmlns:android
+		ADDED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml:1:11-69
+queries
+ADDED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml:2:3-6:13
+intent#action:name:android.intent.action.TTS_SERVICE
+ADDED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml:3:5-5:14
+action#android.intent.action.TTS_SERVICE
+ADDED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml:4:7-66
+	android:name
+		ADDED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml:4:15-63
+uses-sdk
+INJECTED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml reason: use-sdk injection requested
+INJECTED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml
+INJECTED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml
+	android:targetSdkVersion
+		INJECTED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml
+	android:minSdkVersion
+		INJECTED from D:\Work Projects\moneymakers\iMeet\modules\imeet-supertonic\android\src\main\AndroidManifest.xml
