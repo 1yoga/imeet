@@ -7,7 +7,7 @@ if errorlevel 1 goto fail
 
 echo.
 echo === git commit ===
-git add .gitignore app.config.js modules src tools
+git add .gitignore README.md app.config.js modules src tools
 git diff --cached --quiet && goto nothing
 git commit -m "Tidy up: track native TTS module and Windows build config, drop unused Supertonic bridge and one-off scripts" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
 if errorlevel 1 goto fail

@@ -1,0 +1,11 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'com.imeet.voice'
+version = '0.2.0'
+
+android {
+  namespace 'com.imeet.voice'
+}

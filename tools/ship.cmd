@@ -4,7 +4,10 @@ setlocal
 cd /d "%~dp0.."
 set "VER=0.2.0"
 set "LOG=%CD%\artifacts\ship-log.txt"
-echo ship v3 > "%LOG%"
+echo ship v4 > "%LOG%"
+
+echo === 0/4 cleanup (Recycle Bin, log: artifacts\cleanup-log.txt) ===
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cleanup.ps1" > nul
 
 echo === 1/4 Naslukh %VER% from npm ===
 findstr /c:"\"@naslukh/speech-rn\": \"%VER%\"" package.json >nul && goto naslukh_ok
@@ -41,9 +44,9 @@ call "%~dp0build-android.cmd"
 if errorlevel 1 goto fail
 
 echo === 4/4 git commit ===
-git add .gitignore package.json package-lock.json app.json assets src tools docs README.md
+git add -A
 git diff --cached --quiet && goto nothing
-git commit -m "Match card, candidate profile, photo viewer, chat, profile menu with dialogs, countdown, blur" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
+git commit -m "Tidy up: imeet-voice native module without Supertonic, remove unused code, update README" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
 if errorlevel 1 goto fail
 goto done
 :nothing

@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["com.imeet.voice.IMeetDeviceTtsModule", "com.imeet.voice.IMeetVoiceMetricsModule"]
+  }
+}
