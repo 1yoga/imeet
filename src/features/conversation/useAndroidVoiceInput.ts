@@ -2,13 +2,29 @@ import {
   addNaslukhProgressListener,
   createSpeechEngine,
   GIGAAM_MODEL_ID,
+  type SpeechMonitor,
 } from '@naslukh/speech-rn';
+import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppState, PermissionsAndroid, Platform } from 'react-native';
 
 import { hasAndroidTts, loadAndroidTts } from '@/core/voice/androidTts';
 import type { TtsEngine, TtsPlaybackHandle } from '@/core/voice/contracts';
-import { hasSupertonicTts, loadSupertonicTts, prefetchSupertonicModel } from '@/core/voice/supertonicTts';
+import {
+  type ConversationSettings,
+  defaultConversationSettings,
+  loadConversationSettings,
+  normalizeSettings,
+  saveConversationSettings,
+} from '@/core/settings/conversationSettings';
+import { createDeviceTtsEngine, hasDeviceTts, inspectDeviceVoice } from '@/core/voice/deviceTts';
+import { stripFocusMarks } from '@/core/voice/focusMarks';
+import {
+  defaultConversationVoiceId,
+  findDeviceVoice,
+  loadConversationVoiceId,
+  saveConversationVoiceId,
+} from '@/core/voice/voiceCatalog';
 
 import { mockConversationService } from './mockConversationService';
 import type { ConversationStatus } from './types';
@@ -39,6 +55,9 @@ interface ListenTurn {
 
 interface Conversation {
   cancelled: boolean;
+  /** Короткая реакция в паузе пользователя и время последней. */
+  backchannel?: TtsPlaybackHandle;
+  lastBackchannelAt: number;
   requestingPermission: boolean;
   stopFailed: boolean;
   turn?: ListenTurn;
@@ -47,8 +66,6 @@ interface Conversation {
   preparingTts?: TtsEngine;
   preparationStop?: Promise<void>;
 }
-
-type TtsChoice = 'system' | 'supertonic';
 
 function prepareModel() {
   if (!speech || modelReady) return Promise.resolve();
@@ -91,29 +108,74 @@ function cancelConversation(session: Conversation) {
   }
 }
 
-function recognitionError(error: unknown) {
+/** Замеры для отладочной строки состояния: распознавание и время до первого звука ответа. */
+export interface Timings {
+  recognitionMs?: number;
+  replyMs?: number;
+}
+
+/** Короткие реакции в паузе внутри реплики: слова, а не междометия — синтез их произносит естественно. */
+const backchannels = ['Понятно.', 'Ага.', 'Так.', 'Интересно.', 'Вот как.', 'Да-да.'];
+let lastBackchannel = -1;
+function pickBackchannel() {
+  let index = Math.floor(Math.random() * backchannels.length);
+  if (index === lastBackchannel) index = (index + 1) % backchannels.length;
+  lastBackchannel = index;
+  return backchannels[index];
+}
+
+/** Не чаще одной реакции за столько миллисекунд. */
+const BACKCHANNEL_COOLDOWN_MS = 4000;
+
+/** dBFS → 0…1 для анимации: тишина комнаты около −60, громкая речь около −15. */
+function levelFromDbfs(dbfs: number) {
+  return Math.min(1, Math.max(0, (dbfs + 60) / 45));
+}
+
+function isSilence(error: unknown) {
   const message = error instanceof Error ? error.message : '';
-  if (message.includes('Речь не обнаружена') || message.includes('Речь слишком короткая')) {
-    return 'Не удалось услышать фразу. Начните общение снова.';
+  return message.includes('Речь не обнаружена') || message.includes('Речь слишком короткая');
+}
+
+/** Голос ответа: Silero из профиля через RuVoice, если он установлен, иначе системный TTS. */
+async function prepareTts(sileroVoiceId: string, sileroAvailable: boolean | null): Promise<TtsEngine | null> {
+  if (hasDeviceTts && sileroAvailable !== false) {
+    const voice = findDeviceVoice(sileroVoiceId);
+    const engine = createDeviceTtsEngine(voice.engine, voice.query);
+    try {
+      await engine.initialize();
+      return engine;
+    } catch {
+      // RuVoice или голос недоступен: отвечаем системным голосом.
+    }
   }
-  return 'Не удалось распознать речь. Проверьте доступ к микрофону и попробуйте снова.';
+  const system = await loadAndroidTts();
+  await system?.initialize();
+  return system;
 }
 
 export function useAndroidVoiceInput() {
   const current = useRef<Conversation | null>(null);
+  const replies = useRef(mockConversationService.createSession());
   const [model, setModel] = useState<ModelState>(() => modelReady
     ? { phase: 'ready' }
     : { phase: 'loading', message: 'Проверяем модель речи…' });
   const [modelRetry, setModelRetry] = useState(0);
-  const [ttsModel, setTtsModel] = useState<ModelState>(hasSupertonicTts
-    ? { phase: 'loading', message: 'Проверяем модель Supertonic…' }
-    : { phase: 'ready' });
-  const [ttsModelRetry, setTtsModelRetry] = useState(0);
   const [isActive, setActive] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>({ phase: 'idle' });
   const [transcript, setTranscript] = useState('');
   const [reply, setReply] = useState('');
-  const [ttsChoice, setTtsChoice] = useState<TtsChoice>('system');
+  const [sileroVoiceId, setSileroVoiceId] = useState(defaultConversationVoiceId);
+  const [sileroAvailable, setSileroAvailable] = useState<boolean | null>(hasDeviceTts ? null : false);
+  const [muted, setMuted] = useState(false);
+  const mutedRef = useRef(false);
+  const [textBusy, setTextBusy] = useState(false);
+  const [timings, setTimings] = useState<Timings>({});
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [settings, setSettings] = useState<ConversationSettings>(defaultConversationSettings);
+  // Цикл разговора читает настройки на каждом шаге: изменения действуют со следующей реплики.
+  const settingsRef = useRef(defaultConversationSettings);
+  const textPlayback = useRef<TtsPlaybackHandle | null>(null);
 
   useEffect(() => {
     if (!speech) return;
@@ -159,37 +221,46 @@ export function useAndroidVoiceInput() {
     return stopObserving;
   }, [modelRetry]);
 
-  useEffect(() => {
-    if (!hasSupertonicTts) return;
-    let observing = true;
-    setTtsModel({ phase: 'loading', message: 'Проверяем модель Supertonic…' });
-    void prefetchSupertonicModel(({ receivedBytes, totalBytes }) => {
-      if (!observing) return;
-      const mib = 1024 * 1024;
-      setTtsModel({
-        phase: 'loading',
-        message: `Скачиваем Supertonic… ${Math.floor(receivedBytes / mib)} из ${Math.ceil(totalBytes / mib)} МиБ`,
-        progress: totalBytes > 0 ? receivedBytes / totalBytes : undefined,
-      });
-    }).then(() => {
-      if (observing) setTtsModel({ phase: 'ready' });
-    }).catch(() => {
-      if (observing) setTtsModel({
-        phase: 'error',
-        message: 'Не удалось подготовить Supertonic. Проверьте интернет и свободное место или выберите системный голос.',
-      });
+  // Голос можно поменять и в Voice Lab: перечитываем его при возвращении на экран.
+  useFocusEffect(useCallback(() => {
+    let mounted = true;
+    void loadConversationVoiceId().then((id) => {
+      if (mounted) setSileroVoiceId(id);
     });
+    void loadConversationSettings().then((value) => {
+      if (!mounted) return;
+      settingsRef.current = value;
+      setSettings(value);
+    });
+    return () => { mounted = false; };
+  }, []));
+
+  useEffect(() => {
+    if (!hasDeviceTts) return;
+    let observing = true;
+    const voice = findDeviceVoice(sileroVoiceId);
+    setSileroAvailable(null);
+    void inspectDeviceVoice(voice.engine, voice.query)
+      .then((result) => { if (observing) setSileroAvailable(result.available); })
+      .catch(() => { if (observing) setSileroAvailable(false); });
     return () => { observing = false; };
-  }, [ttsModelRetry]);
+  }, [sileroVoiceId]);
+
+  const stopTextPlayback = useCallback(() => {
+    const playback = textPlayback.current;
+    textPlayback.current = null;
+    if (playback) void playback.stop().catch(() => {});
+  }, []);
 
   const end = useCallback(() => {
+    stopTextPlayback();
     const session = current.current;
     if (!session || session.cancelled) return;
 
     cancelConversation(session);
     setActive(false);
-    setFeedback({ phase: 'ending', message: 'Завершаем разговор…' });
-  }, []);
+    setFeedback({ phase: 'ending' });
+  }, [stopTextPlayback]);
 
   useEffect(() => {
     if (!speech) return;
@@ -206,27 +277,31 @@ export function useAndroidVoiceInput() {
     };
   }, [end]);
 
+  // Волна по громкости: «Наслух» шлёт уровень ≈15 раз в секунду, пока есть подписчик.
+  useEffect(() => {
+    const off = speech?.addAudioLevelListener?.(({ rmsDbfs }) => setAudioLevel(levelFromDbfs(rmsDbfs)));
+    return () => off?.();
+  }, []);
+
   const start = async () => {
-    if (!speech || !modelReady || current.current) return;
-    if (voiceInUse) {
-      setFeedback({ phase: 'error', message: 'Предыдущий разговор ещё завершается. Попробуйте снова.' });
-      return;
-    }
+    if (!speech || !modelReady || current.current || voiceInUse) return;
 
     const session: Conversation = {
       cancelled: false,
       requestingPermission: true,
       stopFailed: false,
+      lastBackchannelAt: 0,
     };
     current.current = session;
     voiceInUse = true;
     setActive(true);
-    setFeedback({ phase: 'preparing', message: 'Готовим микрофон…' });
+    setFeedback({ phase: 'preparing' });
 
     let next: Feedback = { phase: 'idle' };
     let stage: 'permission' | 'tts' | 'recognition' = 'permission';
     let tts: TtsEngine | null = null;
-    const useSupertonic = ttsChoice === 'supertonic';
+    // Монитор, который услышал перебивание: следующая реплика продолжается с его захвата.
+    let bargeInMonitor: SpeechMonitor | null = null;
 
     try {
       const permission = await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.RECORD_AUDIO);
@@ -241,26 +316,8 @@ export function useAndroidVoiceInput() {
       }
 
       stage = 'tts';
-      if (useSupertonic) {
-        setFeedback({ phase: 'preparing', message: 'Проверяем модель Supertonic…' });
-        tts = loadSupertonicTts(({ receivedBytes, totalBytes }) => {
-          if (!session.cancelled) {
-            const mib = 1024 * 1024;
-            const message = receivedBytes >= totalBytes
-              ? 'Загружаем модель Supertonic в память…'
-              : `Скачиваем Supertonic… ${Math.floor(receivedBytes / mib)} из ${Math.ceil(totalBytes / mib)} МиБ`;
-            setFeedback({ phase: 'preparing', message });
-          }
-        });
-        session.preparingTts = tts;
-      } else {
-        if (hasAndroidTts) setFeedback({ phase: 'preparing', message: 'Готовим системный голос…' });
-        tts = await loadAndroidTts();
-      }
+      tts = await prepareTts(sileroVoiceId, sileroAvailable);
       if (session.cancelled) return;
-      await tts?.initialize();
-      session.preparingTts = undefined;
-      const replies = mockConversationService.createSession();
 
       while (!session.cancelled) {
         stage = 'recognition';
@@ -272,11 +329,13 @@ export function useAndroidVoiceInput() {
         };
         session.turn = turn;
 
-        const update = (phase: VoicePhase, message: string) => {
+        let recognizingAt = 0;
+        const update = (phase: VoicePhase) => {
           turn.phase = phase;
-          setFeedback({ phase, message });
+          if (phase === 'recognizing') recognizingAt = Date.now();
+          setFeedback({ phase });
         };
-        update('preparing', 'Готовим микрофон…');
+        update('preparing');
 
         const unsubscribe = addNaslukhProgressListener(({ phase, message }) => {
           if (phase === 'listen') turn.nativeReady = true;
@@ -286,52 +345,115 @@ export function useAndroidVoiceInput() {
             return;
           }
           if (phase === 'asr' && turn.phase !== 'recognizing') {
-            update('recognizing', 'Распознаём фразу…');
+            update('recognizing');
           } else if (phase === 'listen') {
-            if (turn.phase === 'preparing') update('listening', 'Говорите. Пауза в 2,5 секунды завершит фразу.');
-            if (turn.phase === 'listening' && message === 'Речь обнаружена') {
-              update('user-speaking', 'Слушаем…');
-            }
+            if (turn.phase === 'preparing') update('listening');
+            if (turn.phase === 'listening' && message === 'Речь обнаружена') update('user-speaking');
           }
         });
 
-        let text: string;
+        const engine = tts;
+        const pauseMs = Math.round(settingsRef.current.backchannelPauseSec * 1000);
+        const backchannelOn = pauseMs > 0 && engine !== null && !mutedRef.current;
+        // Короткая реакция в паузе: не перебивает, реплика продолжает записываться.
+        const offPause = backchannelOn
+          ? speech.addSpeechPauseListener?.(() => {
+            if (session.cancelled || mutedRef.current || !engine) return;
+            const now = Date.now();
+            if (now - session.lastBackchannelAt < BACKCHANNEL_COOLDOWN_MS) return;
+            session.lastBackchannelAt = now;
+            void engine.speak({ text: pickBackchannel(), locale: 'ru-RU' })
+              .then((handle) => { session.backchannel = handle; })
+              .catch(() => {});
+          })
+          : undefined;
+        const continueFromMonitor = bargeInMonitor?.id;
+        bargeInMonitor = null;
+        if (continueFromMonitor) update('user-speaking');
+
+        let text = '';
         try {
           text = (await speech.listenOnce({
             language: 'ru',
             vadThreshold: 0.5,
-            vadMinSilenceSec: 2.5,
+            vadMinSilenceSec: settingsRef.current.endOfPhraseSec,
+            ...(backchannelOn ? { speechPauseMs: pauseMs } : {}),
+            // Эхоподавление нужно, когда во время записи может звучать сам телефон.
+            echoCancellation: backchannelOn || Boolean(continueFromMonitor),
+            ...(continueFromMonitor ? { continueFromMonitor } : {}),
           })).text.trim();
+        } catch (error) {
+          // Экран слушает постоянно: тишина — не ошибка, просто слушаем дальше.
+          if (!isSilence(error)) throw error;
         } finally {
+          offPause?.();
           unsubscribe();
+          setAudioLevel(0);
           turn.nativeReady = false;
           await turn.command;
           session.turn = undefined;
         }
 
         if (session.cancelled) return;
-        if (!text) {
-          next = { phase: 'error', message: 'Фраза не распознана. Начните общение снова.' };
-          return;
-        }
+        if (!text) continue;
 
-        const answer = replies.replyTo(text);
+        const recognizedAt = Date.now();
+        const answer = replies.current.replyTo(text);
         setTranscript(text);
-        setReply(answer);
+        setReply(stripFocusMarks(answer));
+        setTimings({ recognitionMs: recognizingAt ? recognizedAt - recognizingAt : undefined });
 
-        if (!tts) continue;
+        if (!tts || mutedRef.current) continue;
 
         stage = 'tts';
-        setFeedback({ phase: 'speaking', message: 'Озвучиваем ответ…' });
+        setFeedback({ phase: 'thinking' });
+        // Реакция в паузе могла ещё звучать: ответ её сменяет.
+        await session.backchannel?.stop().catch(() => {});
+        session.backchannel = undefined;
+        const delayMs = settingsRef.current.replyDelaySec * 1000;
+        if (delayMs > 0) {
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          if (session.cancelled) return;
+          if (mutedRef.current) continue;
+        }
+        // Перебивание: монитор слушает, пока агент говорит.
+        let monitor: SpeechMonitor | null = null;
+        let interrupted = false;
+        if (settingsRef.current.bargeIn && speech.monitorSpeech) {
+          try {
+            monitor = await speech.monitorSpeech({});
+            monitor.onSpeech(() => {
+              interrupted = true;
+              stopPlayback(session);
+              if (!session.cancelled) setFeedback({ phase: 'user-speaking' });
+            });
+          } catch {
+            monitor = null; // старая нативная сборка или микрофон занят — отвечаем без перебивания
+          }
+        }
         try {
           // Naslukh releases AudioRecord before listenOnce settles.
-          const playback = await tts.speak({ text: answer, locale: 'ru-RU' });
+          const playback = await tts.speak({
+            // Разметку логического ударения понимает только Silero в RuVoice.
+            text: tts.id.startsWith('device:') ? answer : stripFocusMarks(answer),
+            locale: 'ru-RU',
+            onStart: () => {
+              if (session.cancelled) return;
+              setFeedback({ phase: 'speaking' });
+              setTimings((value) => ({ ...value, replyMs: Date.now() - recognizedAt }));
+            },
+          });
           session.playback = playback;
-          if (session.cancelled) stopPlayback(session);
+          if (session.cancelled || mutedRef.current || interrupted) stopPlayback(session);
 
           const result = await playback.finished;
-          if (!session.cancelled && result === 'stopped') {
-            throw new Error('Android TTS playback was interrupted');
+          if (!session.cancelled && !mutedRef.current && !interrupted && result === 'stopped') {
+            throw new Error('TTS playback was interrupted');
+          }
+          if (interrupted && monitor && !session.cancelled) {
+            // Захват монитора с началом фразы перейдёт в следующий listenOnce.
+            bargeInMonitor = monitor;
+            monitor = null;
           }
         } catch (error) {
           stopPlayback(session);
@@ -340,36 +462,32 @@ export function useAndroidVoiceInput() {
           await session.playbackStop;
           session.playback = undefined;
           session.playbackStop = undefined;
+          await monitor?.stop().catch(() => {});
         }
       }
-    } catch (error) {
+    } catch {
       const messages = {
         permission: 'Не удалось получить доступ к микрофону.',
-        tts: useSupertonic
-          ? 'Supertonic недоступен. Проверьте подключение и свободное место или выберите системный голос.'
-          : 'Не удалось озвучить ответ. Проверьте русский голос в настройках синтеза речи Android.',
-        recognition: recognitionError(error),
+        tts: 'Не удалось озвучить ответ. Проверьте RuVoice или русский голос Android.',
+        recognition: 'Не удалось распознать речь. Проверьте доступ к микрофону.',
       };
-      next = {
-        phase: 'error',
-        message: messages[stage],
-      };
+      next = { phase: 'error', message: messages[stage] };
     } finally {
+      await bargeInMonitor?.stop().catch(() => {});
+      await session.backchannel?.stop().catch(() => {});
       session.preparingTts = undefined;
       await session.preparationStop;
-      if (useSupertonic && tts) {
-        try {
-          await tts.dispose();
-        } catch {
-          session.stopFailed = true;
-        }
+      try {
+        await tts?.stop();
+      } catch {
+        session.stopFailed = true;
       }
       voiceInUse = false;
       if (current.current === session) {
         current.current = null;
         setActive(false);
         if (session.stopFailed) {
-          setFeedback({ phase: 'error', message: 'Не удалось полностью остановить звук. Попробуйте снова.' });
+          setFeedback({ phase: 'error', message: 'Не удалось полностью остановить звук.' });
         } else {
           setFeedback(session.cancelled ? { phase: 'idle' } : next);
         }
@@ -377,43 +495,82 @@ export function useAndroidVoiceInput() {
     }
   };
 
-  const stop = () => {
-    const session = current.current;
-    const turn = session?.turn;
-    if (!speech || !session || session.cancelled || !turn?.nativeReady) return;
-    const phase = turn.phase;
-    if (phase !== 'listening' && phase !== 'user-speaking') return;
+  /** «Не могу говорить»: ответ на сообщение, набранное текстом. */
+  const sendText = async (raw: string) => {
+    const text = raw.trim();
+    if (!text || textBusy) return;
+    setTextBusy(true);
+    stopTextPlayback();
+    const sentAt = Date.now();
+    const answer = replies.current.replyTo(text);
+    setTranscript(text);
+    setReply(stripFocusMarks(answer));
+    setTimings({});
+    let failed = false;
+    try {
+      if (mutedRef.current) return;
+      setFeedback({ phase: 'thinking' });
+      const delayMs = settingsRef.current.replyDelaySec * 1000;
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const tts = await prepareTts(sileroVoiceId, sileroAvailable);
+      if (!tts || mutedRef.current) return;
+      const playback = await tts.speak({
+        text: tts.id.startsWith('device:') ? answer : stripFocusMarks(answer),
+        locale: 'ru-RU',
+        onStart: () => {
+          setFeedback({ phase: 'speaking' });
+          setTimings({ replyMs: Date.now() - sentAt });
+        },
+      });
+      textPlayback.current = playback;
+      await playback.finished;
+    } catch {
+      failed = true;
+      setFeedback({ phase: 'error', message: 'Не удалось озвучить ответ. Проверьте RuVoice или русский голос Android.' });
+    } finally {
+      textPlayback.current = null;
+      setTextBusy(false);
+      if (!failed) setFeedback((value) => (value.phase === 'error' ? value : { phase: 'idle' }));
+    }
+  };
 
-    turn.phase = 'stopping';
-    setFeedback({ phase: 'stopping', message: 'Завершаем фразу…' });
-    turn.command = speech.stopListenOnce().catch(() => {
-      if (!turn.nativeReady || session.cancelled || turn.phase !== 'stopping') return;
-      turn.phase = phase;
-      setFeedback({ phase, message: 'Не удалось завершить фразу. Попробуйте ещё раз.' });
-    });
+  /** «Не могу слушать»: ответы показываются текстом и не озвучиваются. */
+  const toggleMuted = () => {
+    const value = !mutedRef.current;
+    mutedRef.current = value;
+    setMuted(value);
+    if (value) {
+      stopTextPlayback();
+      const session = current.current;
+      if (session) stopPlayback(session);
+    }
+  };
+
+  const changeVoice = async (id: string) => {
+    await saveConversationVoiceId(id);
+    setSileroVoiceId(id);
+  };
+
+  const updateSettings = async (changes: Partial<ConversationSettings>) => {
+    const next = normalizeSettings({ ...settingsRef.current, ...changes });
+    settingsRef.current = next;
+    setSettings(next);
+    await saveConversationSettings(next);
+  };
+
+  const clearError = () => {
+    if (feedback.phase === 'error') setFeedback({ phase: 'idle' });
   };
 
   const { phase, message } = feedback;
   const status: ConversationStatus = phase === 'ending' || phase === 'stopping' ? 'recognizing' : phase;
   const retryModel = () => setModelRetry((value) => value + 1);
-  const retryTtsModel = () => setTtsModelRetry((value) => value + 1);
-  const selectTts = (choice: TtsChoice) => {
-    if (!current.current && (choice === 'system' || hasSupertonicTts)) {
-      setTtsChoice(choice);
-      setFeedback({ phase: 'idle' });
-    }
-  };
 
   return {
     supported: speech !== null,
-    hasTts: ttsChoice === 'supertonic' ? hasSupertonicTts : hasAndroidTts,
-    hasSupertonicTts,
-    ttsChoice,
-    selectTts,
+    hasTts: hasDeviceTts || hasAndroidTts,
     model,
     retryModel,
-    ttsModel,
-    retryTtsModel,
     isActive,
     phase,
     status,
@@ -421,7 +578,18 @@ export function useAndroidVoiceInput() {
     transcript,
     reply,
     start,
-    stop,
     end,
+    clearError,
+    muted,
+    toggleMuted,
+    sendText,
+    textBusy,
+    sileroVoiceId,
+    sileroAvailable,
+    changeVoice,
+    timings,
+    settings,
+    updateSettings,
+    audioLevel,
   };
 }

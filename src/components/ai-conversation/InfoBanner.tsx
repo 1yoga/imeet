@@ -82,7 +82,7 @@ const styles = StyleSheet.create({
   },
   text: {
     ...typography.info,
-    color: colors.white,
+    color: colors.subtitle,
   },
   progressTrack: {
     backgroundColor: colors.glassBorder,

@@ -11,8 +11,8 @@
       "bundleIdentifier": "com.imeet.app"
     },
     "android": {
-      "package": "com.imeet.app",
-      "versionCode": 2,
+      "package": "com.imeet.voicecheck",
+      "versionCode": 3,
       "permissions": ["android.permission.RECORD_AUDIO"],
       "adaptiveIcon": {
         "foregroundImage": "./assets/icons/adaptive-foreground.png",

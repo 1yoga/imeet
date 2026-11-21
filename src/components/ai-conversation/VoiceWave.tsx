@@ -1,85 +1,95 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { Animated, Easing, Platform, StyleSheet } from 'react-native';
-import { Image } from 'expo-image';
+import { useEffect, useMemo } from 'react';
+import { PixelRatio, StyleSheet, View } from 'react-native';
+import { Canvas, Fill, Shader, Skia } from '@shopify/react-native-skia';
+import {
+  Easing,
+  useDerivedValue,
+  useFrameCallback,
+  useSharedValue,
+  withTiming,
+} from 'react-native-reanimated';
 
-import type { ConversationStatus } from '@/features/conversation/types';
+import { layerSeeds, waveFormants, waveMotion, waveShaderSource } from '@/components/ai-conversation/wave/waveShader';
+import { VoiceWaveImage, type VoiceWaveProps } from '@/components/ai-conversation/VoiceWaveImage';
 
-interface VoiceWaveProps {
-  height: number;
-  left: number;
-  status: ConversationStatus;
-  top: number;
-  width: number;
+// Компилируется один раз на запуск; null — драйвер не принял шейдер, тогда показываем картинку.
+const effect = Skia.RuntimeEffect.Make(waveShaderSource);
+if (!effect && __DEV__) console.warn('[VoiceWave] шейдер волны не скомпилировался, показываю картинку');
+
+const stateEase = { duration: 450, easing: Easing.out(Easing.cubic) };
+// Голос: быстрая атака и плавный спад — волна «подхватывает» слоги и не дёргается.
+const attack = { duration: 70, easing: Easing.out(Easing.quad) };
+const release = { duration: 280, easing: Easing.out(Easing.quad) };
+
+export function VoiceWave(props: VoiceWaveProps) {
+  if (!effect) return <VoiceWaveImage {...props} />;
+  return <ShaderWave {...props} />;
 }
 
-const motion = {
-  idle: { strength: 0.045, opacity: 0.92 },
-  preparing: { strength: 0.055, opacity: 0.78 },
-  listening: { strength: 0.13, opacity: 1 },
-  'user-speaking': { strength: 0.25, opacity: 1 },
-  recognizing: { strength: 0.065, opacity: 0.85 },
-  thinking: { strength: 0.065, opacity: 0.85 },
-  speaking: { strength: 0.19, opacity: 0.94 },
-  error: { strength: 0.03, opacity: 0.58 },
-} satisfies Record<ConversationStatus, { strength: number; opacity: number }>;
+function ShaderWave({ active = true, height, left, level = 0, status, top, width }: VoiceWaveProps) {
+  const motion = waveMotion[status];
+  const px = useMemo(() => 1 / PixelRatio.get(), []);
 
-const animationOptions = {
-  isInteraction: false,
-  useNativeDriver: Platform.OS !== 'web',
-};
+  const time = useSharedValue(0);
+  const speed = useSharedValue(motion.speed);
+  const energy = useSharedValue(motion.energy);
+  const think = useSharedValue(motion.think);
+  const speak = useSharedValue(motion.speak);
+  const dim = useSharedValue(motion.dim);
+  const voice = useSharedValue(0);
 
-export function VoiceWave({ height, left, status, top, width }: VoiceWaveProps) {
-  const phase = useRef(new Animated.Value(0)).current;
-  const strength = useRef(new Animated.Value(motion.idle.strength)).current;
-  const opacity = useRef(new Animated.Value(motion.idle.opacity)).current;
-  const scaleY = useMemo(() => {
-    const pulse = phase.interpolate({
-      inputRange: [0, 0.08, 0.18, 0.27, 0.37, 0.46, 0.56, 0.65, 0.75, 0.84, 0.93, 1],
-      outputRange: [0.22, 0.29, 0.62, 0.49, 0.27, 0.43, 0.86, 0.62, 0.32, 0.42, 0.28, 0.22],
-    });
-    return Animated.add(1, Animated.multiply(strength, pulse));
-  }, [phase, strength]);
+  // Время течёт в UI-потоке со скоростью состояния: смена скорости не даёт рывка фазы.
+  const clock = useFrameCallback((frame) => {
+    const dt = Math.min(frame.timeSincePreviousFrame ?? 16, 50) / 1000;
+    time.value = (time.value + dt * speed.value) % 3600;
+  }, false);
 
   useEffect(() => {
-    // Keep the rhythm running while conversation states change.
-    const animation = Animated.loop(
-      Animated.timing(phase, {
-        ...animationOptions,
-        duration: 2800,
-        easing: Easing.linear,
-        toValue: 1,
-      }),
-    );
-    animation.start();
-    return () => animation.stop();
-  }, [phase]);
+    clock.setActive(active);
+    return () => clock.setActive(false);
+  }, [active, clock]);
 
   useEffect(() => {
-    const target = motion[status];
-    const transition = {
-      ...animationOptions,
-      duration: 170,
-      easing: Easing.out(Easing.cubic),
+    speed.value = withTiming(motion.speed, stateEase);
+    energy.value = withTiming(motion.energy, stateEase);
+    think.value = withTiming(motion.think, stateEase);
+    speak.value = withTiming(motion.speak, stateEase);
+    dim.value = withTiming(motion.dim, stateEase);
+  }, [dim, energy, motion, speak, speed, think]);
+
+  const heard = motion.hearsUser ? Math.min(1, Math.max(0, level)) : 0;
+  useEffect(() => {
+    voice.value = withTiming(heard, heard > voice.value ? attack : release);
+  }, [heard, voice]);
+
+  const uniforms = useDerivedValue(() => {
+    const t = time.value;
+    const front = waveFormants(t, layerSeeds.front, voice.value, speak.value);
+    const echo1 = waveFormants(t, layerSeeds.echo1, voice.value, speak.value);
+    const echo2 = waveFormants(t, layerSeeds.echo2, voice.value, speak.value);
+    return {
+      uRes: [width, height],
+      uPx: px,
+      uTime: t,
+      uEnergy: energy.value,
+      uLevel: voice.value,
+      uSpeak: speak.value,
+      uThink: think.value,
+      uDim: dim.value,
+      uF0: front[0], uF1: front[1], uF2: front[2], uF3: front[3], uF4: front[4],
+      uG0: echo1[0], uG1: echo1[1], uG2: echo1[2], uG3: echo1[3], uG4: echo1[4],
+      uH0: echo2[0], uH1: echo2[1], uH2: echo2[2], uH3: echo2[3], uH4: echo2[4],
     };
-    const animation = Animated.parallel([
-      Animated.timing(strength, { ...transition, toValue: target.strength }),
-      Animated.timing(opacity, { ...transition, toValue: target.opacity }),
-    ]);
-    animation.start();
-    return () => animation.stop();
-  }, [opacity, status, strength]);
+  });
 
   return (
-    <Animated.View
-      pointerEvents="none"
-      style={[styles.container, { height, left, opacity, top, transform: [{ scaleY }], width }]}
-    >
-      <Image
-        contentFit="fill"
-        source={require('../../../assets/figma/voice-wave.png')}
-        style={{ height, width }}
-      />
-    </Animated.View>
+    <View pointerEvents="none" style={[styles.container, { height, left, top, width }]}>
+      <Canvas style={{ height, width }}>
+        <Fill>
+          <Shader source={effect!} uniforms={uniforms} />
+        </Fill>
+      </Canvas>
+    </View>
   );
 }
 

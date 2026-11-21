@@ -1,12 +1,13 @@
 import { LinearGradient } from 'expo-linear-gradient';
 import { useKeepAwake } from 'expo-keep-awake';
-import { router, type Href } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { useCallback, useEffect, useState } from 'react';
 import {
   Pressable,
-  ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   useWindowDimensions,
   View,
 } from 'react-native';
@@ -14,58 +15,80 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { BottomTabBar } from '@/components/ai-conversation/BottomTabBar';
 import { ConversationButton } from '@/components/ai-conversation/ConversationButton';
+import { ConversationCaptions } from '@/components/ai-conversation/ConversationCaptions';
+import { ConversationStatusChip } from '@/components/ai-conversation/ConversationStatusChip';
 import { InfoBanner } from '@/components/ai-conversation/InfoBanner';
 import { VoiceWave } from '@/components/ai-conversation/VoiceWave';
+import { ProfileVoiceSettings } from '@/components/profile/ProfileVoiceSettings';
+import { SHOW_CONVERSATION_DEBUG } from '@/config/dev';
 import { useAndroidVoiceInput } from '@/features/conversation/useAndroidVoiceInput';
 import { useAppStore } from '@/store/app-store';
 import { colors, layout, typography } from '@/theme/tokens';
 
-const ttsChoices = [
-  { value: 'system', label: 'Системный TTS' },
-  { value: 'supertonic', label: 'Supertonic 3 · F1' },
-] as const;
+const noSoundIcon = require('../../../assets/figma/no-sound.svg');
+const noMicrophoneIcon = require('../../../assets/figma/no-microphone.svg');
+
+type Banner = { text: string; progress?: number; onDismiss?: () => void };
 
 export function AIConversationScreen() {
   useKeepAwake();
   const voice = useAndroidVoiceInput();
-  const canStartVoice = !voice.isActive && voice.model.phase === 'ready'
-    && (voice.ttsChoice === 'system' || voice.ttsModel.phase === 'ready')
-    && (voice.phase === 'idle' || voice.phase === 'error');
-  const canStopVoice = voice.phase === 'listening' || voice.phase === 'user-speaking';
   const { height, width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const scale = Math.min(
-    1,
-    width / layout.frameWidth,
-    height / layout.frameHeight,
-  );
+  const activeTab = useAppStore((state) => state.activeTab);
+  const setActiveTab = useAppStore((state) => state.setActiveTab);
+  const isInfoVisible = useAppStore((state) => state.isInfoVisible);
+  const dismissInfo = useAppStore((state) => state.dismissInfo);
+  const [focused, setFocused] = useState(true);
+  const [textMode, setTextMode] = useState(false);
+  const [draft, setDraft] = useState('');
+
+  useFocusEffect(useCallback(() => {
+    setFocused(true);
+    return () => setFocused(false);
+  }, []));
+
+  // В макете нет кнопки «Начать»: на главном экране приложение слушает само.
+  const onMain = activeTab === 'notifications';
+  const shouldListen = voice.supported && focused && onMain && !textMode && voice.model.phase === 'ready';
+  useEffect(() => {
+    if (shouldListen && !voice.isActive && voice.phase === 'idle') void voice.start();
+    if (!shouldListen && voice.isActive) voice.end();
+  }, [shouldListen, voice.isActive, voice.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const scale = Math.min(1, width / layout.frameWidth, height / layout.frameHeight);
   const contentWidth = Math.max(0, width - layout.horizontalPadding * 2);
   const titleTop = Math.max(layout.titleTop * scale, insets.top + 18 * scale);
   const tabBarHeight = 84;
-  const spaceAboveTabs = height - insets.bottom - 24 * scale - tabBarHeight - 16 * scale;
+  const tabBarTop = height - insets.bottom - 24 * scale - tabBarHeight;
+  const spaceAboveTabs = tabBarTop - 16 * scale;
   const actionsTop = Math.min(layout.actionsTop * scale, spaceAboveTabs - 96);
-  const infoTop = actionsTop - 80;
+  const infoTop = actionsTop - 70;
   const waveTop = layout.waveTop * scale;
   const waveHeight = layout.waveHeight * scale;
-  const waveBottom = waveTop + waveHeight;
-  const statusTop = titleTop + (voice.hasSupertonicTts ? 142 : 112);
-  const transcriptTop = waveBottom + 30;
   const waveWidth = layout.waveWidth * scale;
-  const waveLeft =
-    (width - layout.frameWidth * scale) / 2 + layout.waveLeft * scale;
-  const activeTab = useAppStore((state) => state.activeTab);
-  const setActiveTab = useAppStore((state) => state.setActiveTab);
-  const preparation = voice.model.phase !== 'ready' ? voice.model : voice.ttsModel;
-  const retryPreparation = voice.model.phase === 'error'
-    ? voice.retryModel
-    : voice.ttsChoice === 'supertonic' && voice.ttsModel.phase === 'error'
-      ? voice.retryTtsModel
-      : undefined;
-  const showModel = voice.supported && preparation.phase !== 'ready';
-  const conversationHint = voice.hasTts
-    ? 'Пробный разговор по-русски со сценарными ответами.'
-    : 'Пробный разговор по-русски. В этой сборке ответы показываются текстом.';
-  const canChangeTts = !voice.isActive && (voice.phase === 'idle' || voice.phase === 'error');
+  const waveLeft = (width - layout.frameWidth * scale) / 2 + layout.waveLeft * scale;
+
+  let banner: Banner | null = null;
+  if (!voice.supported) {
+    banner = { text: 'Голосовое общение доступно в приложении для Android.' };
+  } else if (voice.model.phase !== 'ready') {
+    banner = voice.model.phase === 'loading'
+      ? { text: voice.model.message, progress: voice.model.progress }
+      : { text: voice.model.message, onDismiss: voice.retryModel };
+  } else if (voice.phase === 'error' && voice.message) {
+    banner = { text: voice.message, onDismiss: voice.clearError };
+  } else if (voice.muted && voice.reply && !SHOW_CONVERSATION_DEBUG) {
+    banner = { text: voice.reply };
+  } else if (!textMode && isInfoVisible) {
+    banner = { text: 'Задайте вопрос голосом, или опишите текстом.', onDismiss: dismissInfo };
+  }
+
+  const send = () => {
+    const text = draft;
+    setDraft('');
+    void voice.sendText(text);
+  };
 
   return (
     <View style={styles.screen}>
@@ -77,110 +100,104 @@ export function AIConversationScreen() {
         style={StyleSheet.absoluteFill}
       />
 
-      <View style={[styles.textBlock, { top: titleTop, width: contentWidth }]}>
-        <Text style={styles.title}>Добрый день, Александр</Text>
-        <Text style={styles.subtitle}>
-          {voice.supported
-            ? conversationHint
-            : 'Голосовой ввод доступен в приложении для Android.'}
-        </Text>
-        {voice.hasSupertonicTts && (
-          <View accessibilityRole="radiogroup" accessibilityLabel="Движок озвучки" style={styles.ttsChoices}>
-            {ttsChoices.map(({ value, label }) => {
-              const selected = voice.ttsChoice === value;
-              return (
-                <Pressable
-                  key={value}
-                  accessibilityRole="radio"
-                  accessibilityState={{ checked: selected, disabled: !canChangeTts }}
-                  disabled={!canChangeTts}
-                  onPress={() => voice.selectTts(value)}
-                  style={[styles.ttsChoice, selected && styles.ttsChoiceSelected]}
-                >
-                  <Text style={[styles.ttsLabel, selected && styles.ttsLabelSelected]}>{label}</Text>
-                </Pressable>
-              );
-            })}
+      {onMain ? (
+        <>
+          <View style={[styles.textBlock, { top: titleTop, width: contentWidth }]}>
+            <Text style={styles.title}>Добрый день, Александр</Text>
+            {SHOW_CONVERSATION_DEBUG && voice.transcript ? (
+              <View style={{ maxHeight: Math.max(0, waveTop - titleTop - 33 * scale - 14), overflow: 'hidden' }}>
+                <ConversationCaptions reply={voice.reply} transcript={voice.transcript} />
+              </View>
+            ) : (
+              <Text style={styles.subtitle}>
+                Я помогу вам найти: любовь, друзей, или просто хорошую компанию для похода на выставку или в кино.
+              </Text>
+            )}
           </View>
-        )}
-        {canChangeTts && (
-          <Pressable accessibilityRole="button" onPress={() => router.push('/voice-lab' as Href)} style={styles.voiceLabLink}>
-            <Text style={styles.voiceLabLinkText}>Открыть Voice Lab →</Text>
-          </Pressable>
-        )}
-      </View>
 
-      <VoiceWave
-        height={waveHeight}
-        left={waveLeft}
-        status={voice.status}
-        top={waveTop}
-        width={waveWidth}
-      />
+          <VoiceWave active={focused} height={waveHeight} left={waveLeft} level={voice.audioLevel} status={voice.status} top={waveTop} width={waveWidth} />
 
-      {voice.supported && (voice.isActive || Boolean(voice.message)) && (
-        <View style={[styles.voiceStatusBox, { top: statusTop, width: contentWidth, maxHeight: Math.max(0, waveTop - statusTop - 12) }]}>
-          {voice.isActive && <Text style={styles.voiceStatus}>Разговор активен</Text>}
-          {voice.message && <Text accessibilityLiveRegion="polite" numberOfLines={2} style={styles.voiceMessage}>{voice.message}</Text>}
-        </View>
-      )}
+          {SHOW_CONVERSATION_DEBUG && voice.supported && voice.model.phase === 'ready' && (
+            <ConversationStatusChip
+              micOff={textMode}
+              soundOff={voice.muted}
+              status={voice.status}
+              timings={voice.timings}
+              top={waveTop}
+            />
+          )}
 
-      {voice.supported && Boolean(voice.transcript || voice.reply) && (
-        <ScrollView
-          contentContainerStyle={styles.voiceFeedbackContent}
-          style={[
-            styles.voiceFeedback,
-            {
-              maxHeight: Math.max(0, actionsTop - transcriptTop - 12),
-              top: transcriptTop,
-              width: contentWidth,
-            },
-          ]}
-        >
-          {voice.transcript !== '' && (
-            <View accessibilityLiveRegion="polite">
-              <Text style={styles.voiceMessage}>Ваша фраза</Text>
-              <Text selectable style={styles.transcript}>{voice.transcript}</Text>
+          {banner && (
+            <InfoBanner
+              onDismiss={banner.onDismiss}
+              progress={banner.progress}
+              scale={scale}
+              text={banner.text}
+              top={textMode ? infoTop - 64 * scale : infoTop}
+              width={contentWidth}
+            />
+          )}
+
+          {textMode && (
+            <View style={[styles.composer, { top: infoTop, width: contentWidth, minHeight: 54 * scale }]}>
+              <TextInput
+                accessibilityLabel="Сообщение"
+                autoFocus
+                editable={!voice.textBusy}
+                onChangeText={setDraft}
+                onSubmitEditing={send}
+                placeholder="Опишите текстом"
+                placeholderTextColor={colors.subtitle}
+                returnKeyType="send"
+                style={styles.input}
+                value={draft}
+              />
+              <Pressable
+                accessibilityLabel="Отправить"
+                accessibilityRole="button"
+                disabled={!draft.trim() || voice.textBusy}
+                hitSlop={8}
+                onPress={send}
+                style={[styles.send, (!draft.trim() || voice.textBusy) && styles.disabled]}
+              >
+                <Text style={styles.sendText}>↑</Text>
+              </Pressable>
             </View>
           )}
-          {voice.reply !== '' && (
-            <View>
-              <Text style={styles.voiceMessage}>Ответ iMeet</Text>
-              <Text selectable style={styles.transcript}>{voice.reply}</Text>
+
+          {voice.supported && (
+            <View style={[styles.actions, { top: actionsTop, width: contentWidth }]}>
+              <ConversationButton
+                accessibilityHint="Ответы будут показаны текстом без озвучки"
+                iconSource={noSoundIcon}
+                label="Не могу слушать"
+                onPress={voice.toggleMuted}
+                variant={voice.muted ? 'secondary' : 'primary'}
+              />
+              <ConversationButton
+                accessibilityHint="Микрофон выключится, можно писать текстом"
+                iconSource={noMicrophoneIcon}
+                label="Не могу говорить"
+                onPress={() => setTextMode((value) => !value)}
+                variant={textMode ? 'secondary' : 'primary'}
+              />
             </View>
           )}
-        </ScrollView>
-      )}
-
-      {showModel && (
-        <InfoBanner
-          progress={preparation.phase === 'loading' ? preparation.progress : undefined}
-          scale={scale}
-          text={preparation.message}
-          top={infoTop}
-          width={contentWidth}
+        </>
+      ) : activeTab === 'profile' ? (
+        <ProfileVoiceSettings
+          available={voice.sileroAvailable}
+          bottom={height - tabBarTop + 16}
+          onChange={voice.changeVoice}
+          onSettingsChange={voice.updateSettings}
+          selectedId={voice.sileroVoiceId}
+          settings={voice.settings}
+          top={titleTop}
         />
-      )}
-
-      {voice.supported && (
-        <View style={[styles.actions, { top: actionsTop, width: contentWidth }]}>
-          {retryPreparation ? (
-            <ConversationButton label="Повторить подготовку" onPress={retryPreparation} />
-          ) : (
-            <ConversationButton
-              disabled={!canStartVoice && !canStopVoice}
-              label={voice.isActive ? 'Закончить фразу' : 'Начать общение'}
-              onPress={voice.isActive ? voice.stop : voice.start}
-            />
-          )}
-          {voice.isActive && (
-            <ConversationButton
-              accessibilityHint="Незавершённая фраза будет отброшена"
-              label="Завершить разговор"
-              onPress={voice.end}
-              variant="secondary"
-            />
-          )}
+      ) : (
+        <View style={[styles.textBlock, { top: titleTop, width: contentWidth }]}>
+          <Text style={styles.title}>Карточки симпатий</Text>
+          <Text style={styles.subtitle}>Здесь появятся люди, с которыми у вас совпали интересы.</Text>
         </View>
       )}
 
@@ -202,89 +219,54 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   textBlock: {
-    left: 16,
+    gap: 4,
+    left: layout.horizontalPadding,
     position: 'absolute',
   },
   title: {
-    fontFamily: typography.title.fontFamily,
+    ...typography.title,
     color: colors.white,
-    fontSize: typography.title.fontSize,
-    fontWeight: typography.title.fontWeight,
-    lineHeight: typography.title.lineHeight,
   },
   subtitle: {
-    fontFamily: typography.subtitle.fontFamily,
+    ...typography.subtitle,
     color: colors.subtitle,
-    fontSize: typography.subtitle.fontSize,
-    fontWeight: typography.subtitle.fontWeight,
-    lineHeight: typography.subtitle.lineHeight,
-    marginTop: 4,
-  },
-  ttsChoices: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-    marginTop: 12,
-  },
-  voiceLabLink: {
-    alignSelf: 'flex-start',
-    marginTop: 10,
-    paddingVertical: 6,
-  },
-  voiceLabLinkText: {
-    color: colors.buttonHighlight,
-    fontSize: 14,
-  },
-  ttsChoice: {
-    borderColor: colors.glassBorder,
-    borderRadius: 12,
-    borderWidth: 1,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-  },
-  ttsChoiceSelected: {
-    backgroundColor: colors.infoBackground,
-    borderColor: colors.buttonHighlight,
-  },
-  ttsLabel: {
-    ...typography.button,
-    color: colors.subtitle,
-  },
-  ttsLabelSelected: {
-    color: colors.white,
   },
   actions: {
     gap: 8,
-    left: 16,
+    left: layout.horizontalPadding,
     position: 'absolute',
   },
-  voiceFeedback: {
-    backgroundColor: colors.backgroundBottom,
-    borderColor: colors.glassBorder,
+  composer: {
+    alignItems: 'center',
+    backgroundColor: colors.infoBackground,
     borderRadius: 12,
-    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
     left: layout.horizontalPadding,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
     position: 'absolute',
   },
-  voiceStatusBox: {
-    left: layout.horizontalPadding,
-    position: 'absolute',
-  },
-  voiceFeedbackContent: {
-    gap: 8,
-    padding: 12,
-  },
-  voiceMessage: {
+  input: {
     ...typography.info,
-    color: colors.subtitle,
-  },
-  voiceStatus: {
-    ...typography.button,
-    color: colors.buttonHighlight,
-  },
-  transcript: {
-    ...typography.subtitle,
     color: colors.white,
-    marginTop: 4,
+    flex: 1,
+    paddingVertical: 8,
+  },
+  send: {
+    alignItems: 'center',
+    backgroundColor: colors.primary,
+    borderRadius: 16,
+    height: 32,
+    justifyContent: 'center',
+    width: 32,
+  },
+  sendText: {
+    color: colors.white,
+    fontSize: 18,
+    fontWeight: '600',
+  },
+  disabled: {
+    opacity: 0.45,
   },
 });

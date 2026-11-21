@@ -8,62 +8,68 @@ import {
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { hasAndroidTts, loadAndroidTts } from '@/core/voice/androidTts';
 import type { TtsEngine, TtsPlaybackHandle } from '@/core/voice/contracts';
+import { hasDeviceTts, inspectDeviceVoice, newDeviceRequestId, playDeviceVoice, stopDeviceVoice } from '@/core/voice/deviceTts';
 import {
-  disposeSupertonicLab,
-  hasSupertonicTts,
-  initializeSupertonicForLab,
-  playSupertonicVoice,
-  stopSupertonicVoice,
-  supertonicVoices,
-  type SupertonicVoiceName,
-} from '@/core/voice/supertonicTts';
+  defaultConversationVoiceId,
+  findVoice,
+  installHint,
+  loadConversationVoiceId,
+  saveConversationVoiceId,
+  voiceCatalog,
+} from '@/core/voice/voiceCatalog';
+import { stripFocusMarks } from '@/core/voice/focusMarks';
+import { hasVoiceMetrics, snapshotAppMemory } from '@/core/voice/voiceMetrics';
 import { colors, typography } from '@/theme/tokens';
 
-type VoiceName = SupertonicVoiceName | 'system';
 type Score = 1 | 2 | 3 | 4 | 5;
-type Criterion = 'naturalness' | 'pleasantness';
-type Ratings = Partial<Record<VoiceName, Partial<Record<Criterion, Score>>>>;
+type Criterion = 'stress' | 'question' | 'accent' | 'emotion';
+type Ratings = Partial<Record<string, Partial<Record<Criterion, Score>>>>;
 type RunMetrics = {
-  voice: VoiceName;
+  voice: string;
   phrase: string;
-  synthesisMs?: number;
   firstFrameMs?: number;
+  appPssKb?: number;
+  error?: string;
   state: 'preparing' | 'playing' | 'completed' | 'stopped' | 'error';
 };
 
-const storageKey = '@imeet/voice-lab/ratings-v1';
-const samples = [
-  { label: 'Приветствие', text: 'Привет! Как хорошо, что мы снова на связи.' },
-  { label: 'Вопрос', text: 'Чем ты любишь заниматься в свободное время?' },
-  { label: 'Эмоциональный ответ', text: 'Вот это здорово! Расскажи скорее, как всё получилось.' },
-  { label: 'Сомнение', text: 'Хм, не знаю… Может, попробуем по-другому?' },
-  { label: 'Угу', text: 'Угу.' },
-  { label: 'Мгм', text: 'Мгм.' },
-  { label: 'Ага', text: 'Ага.' },
-  { label: 'Поддержка', text: 'Понимаю тебя. Такое бывает, давай не спешить.' },
-  { label: 'Предложение', text: 'Может, выберем фильм и устроим уютный вечер?' },
+const storageKey = '@imeet/voice-lab/ratings-v2';
+const criteria = [
+  { id: 'stress', label: 'Ударения' },
+  { id: 'question', label: 'Вопросительная интонация' },
+  { id: 'accent', label: 'Иностранный акцент' },
+  { id: 'emotion', label: 'Эмоции' },
 ] as const;
-const voices: VoiceName[] = [...supertonicVoices.map(({ name }) => name), 'system'];
+const samples = [
+  { label: 'История и вопрос', text: 'Вчера вечером мы с Женей гуляли в Новосибирске и случайно увидели старинный замок на холме. Когда подошли ближе, заметили тяжёлый замок на деревянной двери. Ты бы решился открыть её и узнать, что спрятано внутри?' },
+  { label: 'Встреча и эмоции', text: 'Как же здорово, что ты наконец приехал! Я так обрадовался, что сразу позвонил друзьям и рассказал им удивительную новость. Давай спокойно выпьем чаю, посмеёмся над старой историей и решим, куда отправимся завтра?' },
+  { label: 'Короткий вопрос', text: 'А ты любишь гулять по вечерам?' },
+  { label: 'Тот же вопрос с выделением', text: 'А ты *любишь* гулять по вечерам?' },
+  { label: 'Выбор с выделением', text: 'Тебе интереснее новый *город* или *природа*?' },
+  { label: 'Реакции', text: 'Понятно. Вот как! Ага, понимаю. Ничего себе!' },
+] as const;
+const voiceIds = voiceCatalog.map(({ id }) => id);
+const voiceLabel = (id: string) => findVoice(id)?.label ?? id;
 
 function readRatings(raw: string | null): Ratings {
   if (!raw) return {};
   const parsed: unknown = JSON.parse(raw);
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
   const result: Ratings = {};
-  for (const voice of voices) {
+  for (const voice of voiceIds) {
     const entry = (parsed as Record<string, unknown>)[voice];
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
     const values = entry as Record<string, unknown>;
     const rating: Partial<Record<Criterion, Score>> = {};
-    if ([1, 2, 3, 4, 5].includes(values.naturalness as number)) rating.naturalness = values.naturalness as Score;
-    if ([1, 2, 3, 4, 5].includes(values.pleasantness as number)) rating.pleasantness = values.pleasantness as Score;
+    for (const { id } of criteria) {
+      if ([1, 2, 3, 4, 5].includes(values[id] as number)) rating[id] = values[id] as Score;
+    }
     result[voice] = rating;
   }
   return result;
@@ -72,12 +78,9 @@ function readRatings(raw: string | null): Ratings {
 export function VoiceLabScreen() {
   useKeepAwake();
   const insets = useSafeAreaInsets();
-  const [voice, setVoice] = useState<VoiceName>('F1');
-  const [customText, setCustomText] = useState('');
-  const [modelMessage, setModelMessage] = useState(hasSupertonicTts
-    ? 'Подготавливаем Supertonic…'
-    : 'Supertonic доступен в Android APK с нативным модулем.');
-  const [supertonicReady, setSupertonicReady] = useState(false);
+  const [voice, setVoice] = useState(defaultConversationVoiceId);
+  const [conversationVoice, setConversationVoice] = useState(defaultConversationVoiceId);
+  const [deviceVoice, setDeviceVoice] = useState<{ available: boolean; reason: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
   const [history, setHistory] = useState<RunMetrics[]>([]);
@@ -85,10 +88,9 @@ export function VoiceLabScreen() {
   const [ratingsLoaded, setRatingsLoaded] = useState(false);
   const [storageError, setStorageError] = useState('');
   const busyRef = useRef(false);
-  const requestIdRef = useRef(0);
   const systemTtsRef = useRef<TtsEngine | null>(null);
   const playbackRef = useRef<TtsPlaybackHandle | null>(null);
-  const playingVoiceRef = useRef<VoiceName | null>(null);
+  const playingVoiceRef = useRef<string | null>(null);
   const saveQueueRef = useRef(Promise.resolve());
 
   useEffect(() => {
@@ -99,8 +101,27 @@ export function VoiceLabScreen() {
     }).catch(() => {
       if (mounted) setStorageError('Не удалось прочитать сохранённые оценки.');
     });
+    void loadConversationVoiceId().then((id) => {
+      if (mounted) setConversationVoice(id);
+    });
     return () => { mounted = false; };
   }, []);
+
+  useEffect(() => {
+    const candidate = findVoice(voice);
+    if (candidate?.kind !== 'device') {
+      setDeviceVoice(null);
+      return;
+    }
+    let mounted = true;
+    setDeviceVoice(null);
+    void inspectDeviceVoice(candidate.engine, candidate.query).then((result) => {
+      if (mounted) setDeviceVoice(result);
+    }).catch((error) => {
+      if (mounted) setDeviceVoice({ available: false, reason: error instanceof Error ? error.message : 'Движок не отвечает' });
+    });
+    return () => { mounted = false; };
+  }, [voice]);
 
   useEffect(() => {
     if (!ratingsLoaded) return;
@@ -111,33 +132,9 @@ export function VoiceLabScreen() {
     });
   }, [ratings, ratingsLoaded]);
 
-  useEffect(() => {
-    let mounted = true;
-    let ready = false;
-    if (hasSupertonicTts) {
-      void initializeSupertonicForLab(({ receivedBytes, totalBytes }) => {
-        if (mounted && totalBytes > 0) {
-          setModelMessage(`Загружаем Supertonic… ${Math.floor(receivedBytes / 1048576)} / ${Math.ceil(totalBytes / 1048576)} МиБ`);
-        }
-      }).then(() => {
-        ready = true;
-        if (mounted) {
-          setSupertonicReady(true);
-          setModelMessage('Supertonic готов. Все десять голосов используют одну модель.');
-        } else {
-          void disposeSupertonicLab();
-        }
-      }).catch(() => {
-        if (mounted) setModelMessage('Не удалось подготовить Supertonic. Проверьте модель и интернет.');
-      });
-    }
-    return () => {
-      mounted = false;
-      if (ready) {
-        void stopSupertonicVoice().finally(disposeSupertonicLab);
-      }
-      void systemTtsRef.current?.stop();
-    };
+  useEffect(() => () => {
+    void systemTtsRef.current?.stop();
+    void stopDeviceVoice();
   }, []);
 
   const rate = (criterion: Criterion, score: Score) => {
@@ -148,20 +145,31 @@ export function VoiceLabScreen() {
     }));
   };
 
+  const selectForConversation = async () => {
+    try {
+      await saveConversationVoiceId(voice);
+      setConversationVoice(voice);
+    } catch {
+      setStorageError('Не удалось сохранить голос для разговора.');
+    }
+  };
+
   const stop = async () => {
     if (!busyRef.current) return;
     if (playingVoiceRef.current === 'system') {
       await playbackRef.current?.stop();
     } else {
-      await stopSupertonicVoice();
+      await stopDeviceVoice();
     }
   };
 
   const play = async (text: string, phrase: string) => {
     const spokenText = text.trim();
     if (!spokenText || spokenText.length > 500 || busyRef.current) return;
-    if (voice !== 'system' && !supertonicReady) return;
-    if (voice === 'system' && !hasAndroidTts) return;
+    const candidate = findVoice(voice);
+    if (!candidate) return;
+    if (candidate.kind === 'device' && !deviceVoice?.available) return;
+    if (candidate.kind === 'system' && !hasAndroidTts) return;
 
     busyRef.current = true;
     playingVoiceRef.current = voice;
@@ -173,7 +181,7 @@ export function VoiceLabScreen() {
     };
     setMetrics(run);
     try {
-      if (voice === 'system') {
+      if (candidate.kind === 'system') {
         const startedAt = performance.now();
         if (!systemTtsRef.current) {
           const engine = await loadAndroidTts();
@@ -182,7 +190,7 @@ export function VoiceLabScreen() {
           systemTtsRef.current = engine;
         }
         const handle = await systemTtsRef.current.speak({
-          text: spokenText,
+          text: stripFocusMarks(spokenText),
           locale: 'ru-RU',
           onStart: () => updateRun({
             firstFrameMs: Math.round(performance.now() - startedAt),
@@ -193,19 +201,20 @@ export function VoiceLabScreen() {
         const result = await handle.finished;
         updateRun({ state: result });
       } else {
-        const requestId = ++requestIdRef.current;
-        const result = await playSupertonicVoice(spokenText, voice, requestId, ({ synthesisMs, firstFrameMs }) => {
-          updateRun({
-            synthesisMs,
-            firstFrameMs,
-            state: 'playing',
-          });
+        const result = await playDeviceVoice(candidate.engine, candidate.query, spokenText, newDeviceRequestId(), (firstFrameMs) => {
+          updateRun({ firstFrameMs, state: 'playing' });
         });
         updateRun({ state: result });
       }
-    } catch {
-      updateRun({ state: 'error' });
+    } catch (error) {
+      updateRun({ state: 'error', error: error instanceof Error ? error.message : String(error) });
     } finally {
+      if (hasVoiceMetrics) {
+        try {
+          const { appPssKb } = await snapshotAppMemory();
+          updateRun({ appPssKb });
+        } catch { /* Metrics remain unavailable on unsupported builds. */ }
+      }
       setHistory((current) => [run, ...current].slice(0, 20));
       playbackRef.current = null;
       playingVoiceRef.current = null;
@@ -214,8 +223,17 @@ export function VoiceLabScreen() {
     }
   };
 
-  const canPlay = voice === 'system' ? hasAndroidTts : supertonicReady;
-  const voiceLabel = (name: VoiceName) => name === 'system' ? 'Системный Android TTS' : name;
+  const candidate = findVoice(voice);
+  const canPlay = candidate?.kind === 'system' ? hasAndroidTts
+    : candidate?.kind === 'device' ? hasDeviceTts && Boolean(deviceVoice?.available)
+    : false;
+  const availability = candidate?.kind !== 'device' ? ''
+    : deviceVoice === null ? 'Проверяем голос на устройстве…'
+    : deviceVoice.available
+      ? candidate.pack === 'cis_ru'
+        ? 'Готово через пакет cis_ru в RuVoice. Он использует вариант v5_cis_base_nostress.'
+        : 'Движок и голос готовы.'
+      : `${installHint(candidate)} ${deviceVoice.reason}`;
 
   return (
     <View style={styles.screen}>
@@ -229,25 +247,28 @@ export function VoiceLabScreen() {
 
         <Text style={styles.heading}>Голос</Text>
         <View accessibilityLabel="Голоса" accessibilityRole="radiogroup" style={styles.voiceGrid}>
-          {voices.map((name) => {
-            const disabled = busy;
-            return (
-              <Pressable
-                key={name}
-                accessibilityRole="radio"
-                accessibilityState={{ checked: voice === name, disabled }}
-                disabled={disabled}
-                onPress={() => setVoice(name)}
-                style={[styles.voiceChip, voice === name && styles.selectedChip, disabled && styles.disabled]}
-              >
-                <Text style={styles.chipText}>{voiceLabel(name)}</Text>
-              </Pressable>
-            );
-          })}
+          {voiceIds.map((id) => (
+            <Pressable
+              key={id}
+              accessibilityRole="radio"
+              accessibilityState={{ checked: voice === id, disabled: busy }}
+              disabled={busy}
+              onPress={() => setVoice(id)}
+              style={[styles.voiceChip, voice === id && styles.selectedChip, busy && styles.disabled]}
+            >
+              <Text style={styles.chipText}>{voiceLabel(id)}{conversationVoice === id ? ' · в разговоре' : ''}</Text>
+            </Pressable>
+          ))}
         </View>
-        <Text style={styles.note}>{modelMessage}</Text>
+        {availability ? <Text accessibilityLiveRegion="polite" style={styles.note}>{availability}</Text> : null}
+        {candidate?.kind === 'device' && conversationVoice !== voice && (
+          <Pressable accessibilityRole="button" disabled={busy} onPress={() => void selectForConversation()} style={[styles.stopButton, busy && styles.disabled]}>
+            <Text style={styles.primaryText}>Использовать в разговоре</Text>
+          </Pressable>
+        )}
 
         <Text style={styles.heading}>Тестовые реплики</Text>
+        <Text style={styles.note}>Слово в *звёздочках* Silero выделяет логическим ударением (правило RuVoice «Логическое ударение»). Системному TTS звёздочки не передаются.</Text>
         {samples.map(({ label, text }) => (
           <View key={label} style={styles.sampleRow}>
             <View style={styles.sampleCopy}>
@@ -260,20 +281,6 @@ export function VoiceLabScreen() {
           </View>
         ))}
 
-        <Text style={styles.heading}>Свой текст</Text>
-        <TextInput
-          accessibilityLabel="Текст для проверки голоса"
-          maxLength={500}
-          multiline
-          onChangeText={setCustomText}
-          placeholder="Введите фразу по-русски"
-          placeholderTextColor={colors.subtitle}
-          style={styles.input}
-          value={customText}
-        />
-        <Pressable accessibilityRole="button" disabled={!canPlay || busy || !customText.trim()} onPress={() => void play(customText, 'Свой текст')} style={[styles.primaryButton, (!canPlay || busy || !customText.trim()) && styles.disabled]}>
-          <Text style={styles.primaryText}>Воспроизвести свой текст</Text>
-        </Pressable>
         {busy && (
           <Pressable accessibilityRole="button" onPress={() => void stop()} style={styles.stopButton}>
             <Text style={styles.primaryText}>Остановить</Text>
@@ -284,10 +291,10 @@ export function VoiceLabScreen() {
           <View style={styles.card}>
             <Text style={styles.heading}>Последний запуск · {voiceLabel(metrics.voice)}</Text>
             <Text style={styles.sampleText}>{metrics.phrase}</Text>
-            <Text style={styles.metric}>Синтез: {metrics.synthesisMs === undefined ? '—' : `${metrics.synthesisMs} мс`}</Text>
             <Text style={styles.metric}>Задержка до начала звука: {metrics.firstFrameMs === undefined ? '—' : `${metrics.firstFrameMs} мс`}</Text>
-            <Text style={styles.note}>{metrics.state === 'error' ? 'Воспроизведение не удалось.' : metrics.state === 'preparing' ? 'Подготавливаем звук…' : metrics.state === 'playing' ? 'Идёт озвучка…' : metrics.state === 'stopped' ? 'Остановлено.' : 'Готово.'}</Text>
-            {metrics.voice === 'system' && <Text style={styles.note}>Для системного TTS Android время до начала измерено по событию onStart; отдельное время синтеза движок не предоставляет.</Text>}
+            <Text style={styles.metric}>Память процесса iMeet (PSS): {metrics.appPssKb === undefined ? '—' : `${Math.round(metrics.appPssKb / 1024)} МиБ`}</Text>
+            <Text style={styles.note}>{metrics.state === 'error' ? `Воспроизведение не удалось: ${metrics.error ?? 'неизвестная ошибка'}` : metrics.state === 'preparing' ? 'Подготавливаем звук…' : metrics.state === 'playing' ? 'Идёт озвучка…' : metrics.state === 'stopped' ? 'Остановлено.' : 'Готово.'}</Text>
+            <Text style={styles.note}>Время до начала измерено по событию onStart Android TTS: движок синтезирует фразу целиком, поэтому оно включает весь синтез. RuVoice работает в своём процессе, его память в PSS iMeet не входит.</Text>
           </View>
         )}
 
@@ -296,7 +303,7 @@ export function VoiceLabScreen() {
             <Text style={styles.heading}>Последние запуски</Text>
             {history.map((run, index) => (
               <Text key={`${index}-${run.voice}-${run.phrase}`} style={styles.note}>
-                {voiceLabel(run.voice)} · {run.phrase}: синтез {run.synthesisMs === undefined ? '—' : `${run.synthesisMs} мс`}, до звука {run.firstFrameMs === undefined ? '—' : `${run.firstFrameMs} мс`}
+                {voiceLabel(run.voice)} · {run.phrase}: до звука {run.firstFrameMs === undefined ? '—' : `${run.firstFrameMs} мс`}
               </Text>
             ))}
           </View>
@@ -304,19 +311,19 @@ export function VoiceLabScreen() {
 
         <View style={styles.card}>
           <Text style={styles.heading}>Оценка · {voiceLabel(voice)}</Text>
-          {(['naturalness', 'pleasantness'] as const).map((criterion) => (
-            <View key={criterion} style={styles.ratingRow}>
-              <Text style={styles.ratingLabel}>{criterion === 'naturalness' ? 'Естественность' : 'Приятность'}</Text>
+          {criteria.map(({ id, label }) => (
+            <View key={id} style={styles.ratingRow}>
+              <Text style={styles.ratingLabel}>{label}</Text>
               <View style={styles.scoreRow}>
                 {([1, 2, 3, 4, 5] as const).map((score) => (
                   <Pressable
                     key={score}
-                    accessibilityLabel={`${criterion === 'naturalness' ? 'Естественность' : 'Приятность'}: ${score} из 5`}
+                    accessibilityLabel={`${label}: ${score} из 5`}
                     accessibilityRole="button"
-                    accessibilityState={{ selected: ratings[voice]?.[criterion] === score, disabled: !ratingsLoaded }}
+                    accessibilityState={{ selected: ratings[voice]?.[id] === score, disabled: !ratingsLoaded }}
                     disabled={!ratingsLoaded}
-                    onPress={() => rate(criterion, score)}
-                    style={[styles.score, ratings[voice]?.[criterion] === score && styles.selectedScore]}
+                    onPress={() => rate(id, score)}
+                    style={[styles.score, ratings[voice]?.[id] === score && styles.selectedScore]}
                   >
                     <Text style={styles.scoreText}>{score}</Text>
                   </Pressable>
@@ -351,8 +358,6 @@ const styles = StyleSheet.create({
   sampleText: { color: colors.white, fontSize: 15, lineHeight: 21 },
   playSmall: { alignItems: 'center', backgroundColor: colors.primary, borderRadius: 24, height: 42, justifyContent: 'center', width: 42 },
   playSmallText: { color: colors.white, fontSize: 18 },
-  input: { borderColor: colors.glassBorder, borderRadius: 14, borderWidth: 1, color: colors.white, fontSize: 16, minHeight: 100, padding: 14, textAlignVertical: 'top' },
-  primaryButton: { alignItems: 'center', backgroundColor: colors.primary, borderRadius: 14, padding: 16 },
   stopButton: { alignItems: 'center', borderColor: colors.glassBorder, borderRadius: 14, borderWidth: 1, padding: 15 },
   primaryText: { color: colors.white, fontSize: 16, fontWeight: '600' },
   card: { backgroundColor: colors.infoBackground, borderRadius: 16, gap: 8, padding: 16 },
