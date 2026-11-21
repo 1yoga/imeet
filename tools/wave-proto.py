@@ -32,12 +32,12 @@ def shape(u, t, seed, level, speak):
         fi = float(i)
         c = centers[i] + 0.03 * np.sin(t * (0.45 + 0.13 * fi) + seed * 2.1 + fi * 1.7)
         osc = 0.5 + 0.5 * np.sin(t * (1.1 + 0.37 * fi + seed * 0.3) + fi * 2.3 + seed)
-        syl = 0.5 + 0.5 * np.sin(t * (7.0 + 1.9 * fi) + seed * 3.0) * np.sin(t * (2.3 + 0.7 * fi) + fi)
+        syl = 0.5 + 0.5 * np.sin(t * (3.2 + 0.8 * fi) + seed * 3.0) * np.sin(t * (1.2 + 0.35 * fi) + fi)
         a = base[i] * (0.62 + 0.38 * osc) * (1.0 + level * (0.5 + 1.1 * syl) + speak * (0.2 + 1.0 * syl))
         w = widths[i] * (1.0 + 0.25 * np.sin(t * 0.7 + fi + seed))
         d = (u - c) / w
         h += a * np.exp(-d * d)
-    ripple = 0.05 * np.sin(u * 46.0 - t * (3.0 + 6.0 * level) + seed * 5.0)
+    ripple = 0.035 * np.sin(u * 46.0 - t * (1.6 + 1.2 * level) + seed * 5.0)
     return h * (1.0 + ripple)
 
 

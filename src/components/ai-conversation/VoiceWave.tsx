@@ -17,9 +17,10 @@ const effect = Skia.RuntimeEffect.Make(waveShaderSource);
 if (!effect && __DEV__) console.warn('[VoiceWave] шейдер волны не скомпилировался, показываю картинку');
 
 const stateEase = { duration: 450, easing: Easing.out(Easing.cubic) };
-// Голос: быстрая атака и плавный спад — волна «подхватывает» слоги и не дёргается.
-const attack = { duration: 70, easing: Easing.out(Easing.quad) };
-const release = { duration: 280, easing: Easing.out(Easing.quad) };
+// Громкость сглаживается в каждом кадре (экспоненциально), а не скачками по 15 обновлениям в секунду:
+// подъём ~0,18 с, спад ~0,5 с — волна плавно «вдыхает» на голос и не дрожит.
+const ATTACK_SEC = 0.18;
+const RELEASE_SEC = 0.5;
 
 export function VoiceWave(props: VoiceWaveProps) {
   if (!effect) return <VoiceWaveImage {...props} />;
@@ -37,11 +38,15 @@ function ShaderWave({ active = true, height, left, level = 0, status, top, width
   const speak = useSharedValue(motion.speak);
   const dim = useSharedValue(motion.dim);
   const voice = useSharedValue(0);
+  const heardTarget = useSharedValue(0);
 
   // Время течёт в UI-потоке со скоростью состояния: смена скорости не даёт рывка фазы.
   const clock = useFrameCallback((frame) => {
     const dt = Math.min(frame.timeSincePreviousFrame ?? 16, 50) / 1000;
     time.value = (time.value + dt * speed.value) % 3600;
+    const target = heardTarget.value;
+    const tau = target > voice.value ? ATTACK_SEC : RELEASE_SEC;
+    voice.value += (target - voice.value) * (1 - Math.exp(-dt / tau));
   }, false);
 
   useEffect(() => {
@@ -59,8 +64,8 @@ function ShaderWave({ active = true, height, left, level = 0, status, top, width
 
   const heard = motion.hearsUser ? Math.min(1, Math.max(0, level)) : 0;
   useEffect(() => {
-    voice.value = withTiming(heard, heard > voice.value ? attack : release);
-  }, [heard, voice]);
+    heardTarget.value = heard;
+  }, [heard, heardTarget]);
 
   const uniforms = useDerivedValue(() => {
     const t = time.value;

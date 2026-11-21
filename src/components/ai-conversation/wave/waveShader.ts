@@ -50,7 +50,7 @@ float bump(float u, float3 f) {
 
 float shape(float u, float t, float seed, float3 f0, float3 f1, float3 f2, float3 f3, float3 f4) {
   float h = bump(u, f0) + bump(u, f1) + bump(u, f2) + bump(u, f3) + bump(u, f4);
-  float ripple = 0.05 * sin(u * 46.0 - t * (3.0 + 6.0 * uLevel) + seed * 5.0);
+  float ripple = 0.035 * sin(u * 46.0 - t * (1.6 + 1.2 * uLevel) + seed * 5.0);
   return h * (1.0 + ripple);
 }
 
@@ -168,7 +168,8 @@ export function waveFormants(t: number, seed: number, level: number, speak: numb
   for (let i = 0; i < 5; i++) {
     const c = centers[i] + 0.03 * Math.sin(lt * (0.45 + 0.13 * i) + seed * 2.1 + i * 1.7);
     const osc = 0.5 + 0.5 * Math.sin(lt * (1.1 + 0.37 * i + seed * 0.3) + i * 2.3 + seed);
-    const syl = 0.5 + 0.5 * Math.sin(lt * (7.0 + 1.9 * i) + seed * 3.0) * Math.sin(lt * (2.3 + 0.7 * i) + i);
+    // Слоговой ритм: медленный, чтобы холмы перекатывались, а не дрожали.
+    const syl = 0.5 + 0.5 * Math.sin(lt * (3.2 + 0.8 * i) + seed * 3.0) * Math.sin(lt * (1.2 + 0.35 * i) + i);
     const a = heights[i] * (0.62 + 0.38 * osc) * (1 + level * (0.5 + 1.1 * syl) + speak * (0.2 + 1.0 * syl));
     const w = widths[i] * (1 + 0.25 * Math.sin(lt * 0.7 + i + seed));
     out.push([c, w, a]);
@@ -193,10 +194,10 @@ export interface WaveMotion {
 export const waveMotion: Record<ConversationStatus, WaveMotion> = {
   idle: { energy: 0.6, think: 0, speak: 0, dim: 0, speed: 0.55, hearsUser: false },
   preparing: { energy: 0.45, think: 0.6, speak: 0, dim: 0.15, speed: 0.8, hearsUser: false },
-  listening: { energy: 0.8, think: 0, speak: 0, dim: 0, speed: 1, hearsUser: true },
-  'user-speaking': { energy: 0.85, think: 0, speak: 0, dim: 0, speed: 1.25, hearsUser: true },
+  listening: { energy: 0.8, think: 0, speak: 0, dim: 0, speed: 0.85, hearsUser: true },
+  'user-speaking': { energy: 0.85, think: 0, speak: 0, dim: 0, speed: 0.7, hearsUser: true },
   recognizing: { energy: 0.5, think: 1, speak: 0, dim: 0, speed: 1.1, hearsUser: false },
   thinking: { energy: 0.45, think: 1, speak: 0, dim: 0, speed: 1.1, hearsUser: false },
-  speaking: { energy: 0.8, think: 0, speak: 1, dim: 0, speed: 1.2, hearsUser: false },
+  speaking: { energy: 0.8, think: 0, speak: 1, dim: 0, speed: 0.7, hearsUser: false },
   error: { energy: 0.35, think: 0, speak: 0, dim: 1, speed: 0.4, hearsUser: false },
 };
