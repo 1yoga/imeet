@@ -512,11 +512,21 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   const sendText = async (raw: string) => {
     const text = raw.trim();
     if (!text || textBusy) return;
+    await say(text, replies.current!.replyTo(text));
+  };
+
+  /** Реплика агента без вопроса пользователя — например, приветствие при запуске. */
+  const greet = async (line: string) => {
+    if (textBusy) return;
+    await say('', line);
+  };
+
+  /** Показать и озвучить ответ агента вне цикла прослушивания. */
+  const say = async (heard: string, answer: string) => {
     setTextBusy(true);
     stopTextPlayback();
     const sentAt = Date.now();
-    const answer = replies.current!.replyTo(text);
-    setTranscript(text);
+    setTranscript(heard);
     setReply(stripFocusMarks(answer));
     setTimings({});
     let failed = false;
@@ -596,6 +606,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
     muted,
     toggleMuted,
     sendText,
+    greet,
     textBusy,
     sileroVoiceId,
     sileroAvailable,

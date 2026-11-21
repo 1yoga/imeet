@@ -1,6 +1,5 @@
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
 
@@ -25,7 +24,7 @@ interface ProfileTabProps {
   onVoiceSettings: () => void;
 }
 
-/** Вкладка «Профиль» (Figma 107:3160 и диалоги): меню профиля над панелью вкладок. */
+/** Вкладка «Профиль» (Figma 107:3160): меню профиля над панелью вкладок поверх размытого главного экрана. */
 export function ProfileTab({ bottom, onVoiceSettings }: ProfileTabProps) {
   const profile = useUserProfile();
   const open = useProfileDialogs((state) => state.open);
@@ -58,23 +57,8 @@ export function ProfileTab({ bottom, onVoiceSettings }: ProfileTabProps) {
   ];
 
   return (
-    <View pointerEvents="box-none" style={StyleSheet.absoluteFill}>
-      {/* Размытые пятна фона из макета. */}
-      <LinearGradient
-        colors={['rgba(190, 170, 255, 0.45)', 'rgba(65, 50, 241, 0.18)', 'rgba(7, 5, 30, 0)']}
-        end={{ x: 0.2, y: 0.5 }}
-        pointerEvents="none"
-        start={{ x: 1, y: 0 }}
-        style={styles.glowTop}
-      />
-      <LinearGradient
-        colors={['rgba(150, 130, 255, 0.35)', 'rgba(7, 5, 30, 0)']}
-        end={{ x: 1, y: 0 }}
-        pointerEvents="none"
-        start={{ x: 0, y: 1 }}
-        style={styles.glowBottom}
-      />
-
+    // Полноэкранный слой: касания не проходят к размытому главному экрану под меню.
+    <View style={StyleSheet.absoluteFill}>
       <View style={[styles.menu, { bottom }]}>
         <GlassSurface style={styles.menuGlass} />
         <View style={styles.header}>
@@ -121,8 +105,6 @@ export function ProfileTab({ bottom, onVoiceSettings }: ProfileTabProps) {
 }
 
 const styles = StyleSheet.create({
-  glowTop: { height: 560, position: 'absolute', right: 0, top: 0, width: '90%' },
-  glowBottom: { bottom: 0, height: 420, left: 0, position: 'absolute', width: '60%' },
   menu: {
     borderColor: colors.glassBorder,
     borderRadius: 30,

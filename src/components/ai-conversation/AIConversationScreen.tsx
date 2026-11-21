@@ -25,7 +25,7 @@ import { MatchCard } from '@/components/matches/MatchCard';
 import { ProfileDialogs } from '@/components/profile/ProfileDialogs';
 import { ProfileTab } from '@/components/profile/ProfileTab';
 import { ProfileVoiceSettings } from '@/components/profile/ProfileVoiceSettings';
-import { BlurTargetContext } from '@/components/ui/BlurBackdrop';
+import { BlurBackdrop, BlurTargetContext } from '@/components/ui/BlurBackdrop';
 import { SHOW_CONVERSATION_DEBUG } from '@/config/dev';
 import { useUserProfile } from '@/core/settings/userProfile';
 import { useAndroidVoiceInput } from '@/features/conversation/useAndroidVoiceInput';
@@ -36,6 +36,11 @@ const noSoundIcon = require('../../../assets/figma/no-sound.svg');
 const noMicrophoneIcon = require('../../../assets/figma/no-microphone.svg');
 
 type Banner = { text: string; progress?: number; onDismiss?: () => void };
+
+/** Приветствие агента после отсчёта при запуске (как образец голоса в настройках). */
+const GREETING = 'Привет! Я помогу тебе найти *интересных* людей. Расскажешь немного о себе?';
+/** Отсчёт и приветствие — один раз за запуск приложения, при возвращении на экран агент сразу слушает. */
+let introPlayed = false;
 
 export function AIConversationScreen() {
   useKeepAwake();
@@ -64,20 +69,27 @@ export function AIConversationScreen() {
 
   // В макете нет кнопки «Начать»: на главном экране приложение слушает само.
   const onMain = activeTab === 'notifications';
+  // Под меню профиля — размытый главный экран (макет), поэтому он рисуется и на вкладке «Профиль».
+  const profileMenu = activeTab === 'profile' && profileView === 'menu';
+  const showMain = onMain || profileMenu;
   const shouldListen = voice.supported && focused && onMain && !textMode && voice.model.phase === 'ready';
-  // Перед началом прослушивания — отсчёт 3-2-1 (макет), затем агент слушает сам до ухода с экрана.
+  // При запуске: отсчёт 3-2-1 (макет) → приветствие голосом → агент слушает сам до ухода с экрана.
   useEffect(() => {
     if (!shouldListen) {
       setCountdown(null);
       if (voice.isActive) voice.end();
       return;
     }
-    if (!voice.isActive && voice.phase === 'idle') setCountdown((value) => value ?? 3);
-  }, [shouldListen, voice.isActive, voice.phase]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (voice.isActive || voice.phase !== 'idle' || voice.textBusy) return;
+    if (introPlayed) void voice.start();
+    else setCountdown((value) => value ?? 3);
+  }, [shouldListen, voice.isActive, voice.phase, voice.textBusy]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const beginListening = useCallback(() => {
+    introPlayed = true;
     setCountdown(null);
-    void voice.start();
+    // Когда приветствие закончится, эффект выше включит прослушивание.
+    void voice.greet(GREETING);
   }, [voice]);
 
   useEffect(() => {
@@ -114,6 +126,19 @@ export function AIConversationScreen() {
     banner = { text: 'Задайте вопрос голосом, или опишите текстом.', onDismiss: dismissInfo };
   }
 
+  const tabBar = (
+    <BottomTabBar
+      activeTab={activeTab}
+      bottomInset={insets.bottom + 24 * scale}
+      onTabChange={(tab) => {
+        setProfileView('menu');
+        setActiveTab(tab);
+      }}
+      scale={scale}
+      width={contentWidth}
+    />
+  );
+
   const send = () => {
     const text = draft;
     setDraft('');
@@ -132,7 +157,7 @@ export function AIConversationScreen() {
             style={StyleSheet.absoluteFill}
           />
 
-          {onMain ? (
+          {showMain ? (
             <>
               <View style={[styles.textBlock, { top: titleTop, width: contentWidth }]}>
                 <Text style={styles.title}>Добрый день, {userName}</Text>
@@ -216,8 +241,6 @@ export function AIConversationScreen() {
                 </View>
               )}
             </>
-          ) : activeTab === 'profile' && profileView === 'menu' ? (
-            <ProfileTab bottom={height - tabBarTop - 4} onVoiceSettings={() => setProfileView('voice')} />
           ) : activeTab === 'profile' ? (
             <ProfileVoiceSettings
               onBack={() => setProfileView('menu')}
@@ -233,17 +256,17 @@ export function AIConversationScreen() {
             <MatchCard bottom={height - tabBarTop - 2} top={Math.max(66 * scale, insets.top + 14)} width={contentWidth} />
           )}
 
-          <BottomTabBar
-            activeTab={activeTab}
-            bottomInset={insets.bottom + 24 * scale}
-            onTabChange={(tab) => {
-              setProfileView('menu');
-              setActiveTab(tab);
-            }}
-            scale={scale}
-            width={contentWidth}
-          />
+          {!profileMenu && tabBar}
         </BlurTargetView>
+
+        {profileMenu && (
+          <>
+            <BlurBackdrop dim="rgba(6, 4, 24, 0.25)" intensity={85} />
+            <ProfileTab bottom={height - tabBarTop - 4} onVoiceSettings={() => setProfileView('voice')} />
+            {/* Панель вкладок над размытием остаётся чёткой, как в макете. */}
+            {tabBar}
+          </>
+        )}
 
         {onMain && countdown !== null && <Countdown onSkip={beginListening} top={waveTop + 20 * scale} value={countdown} />}
         <ProfileDialogs />

@@ -46,7 +46,7 @@ if errorlevel 1 goto fail
 echo === 4/4 git commit ===
 git add -A
 git diff --cached --quiet && goto nothing
-git commit -m "Tidy up: imeet-voice native module without Supertonic, remove unused code, update README" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
+git commit -m "Agent wave follows real voice, greeting after launch countdown, blurred home under profile menu; imeet-voice module, tidy up" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
 if errorlevel 1 goto fail
 goto done
 :nothing

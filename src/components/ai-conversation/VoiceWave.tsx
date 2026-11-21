@@ -10,6 +10,7 @@ import {
 } from 'react-native-reanimated';
 
 import { layerSeeds, waveFormants, waveMotion, waveShaderSource } from '@/components/ai-conversation/wave/waveShader';
+import { listenOutputLevel } from '@/core/voice/outputLevel';
 import { VoiceWaveImage, type VoiceWaveProps } from '@/components/ai-conversation/VoiceWaveImage';
 
 // Компилируется один раз на запуск; null — драйвер не принял шейдер, тогда показываем картинку.
@@ -21,6 +22,16 @@ const stateEase = { duration: 450, easing: Easing.out(Easing.cubic) };
 // подъём ~0,18 с, спад ~0,5 с — волна плавно «вдыхает» на голос и не дрожит.
 const ATTACK_SEC = 0.18;
 const RELEASE_SEC = 0.5;
+// Голос агента — прямо по звуку: быстрее, чтобы волна попадала в слоги.
+const AGENT_ATTACK_SEC = 0.05;
+const AGENT_RELEASE_SEC = 0.16;
+/** Сколько секунд без звука на выходе волна агента ещё считает звук «живым». */
+const AGENT_FRESH_SEC = 0.7;
+
+function follow(current: number, target: number, dt: number, attack: number, release: number) {
+  'worklet';
+  return current + (target - current) * (1 - Math.exp(-dt / (target > current ? attack : release)));
+}
 
 export function VoiceWave(props: VoiceWaveProps) {
   if (!effect) return <VoiceWaveImage {...props} />;
@@ -39,14 +50,24 @@ function ShaderWave({ active = true, height, left, level = 0, status, top, width
   const dim = useSharedValue(motion.dim);
   const voice = useSharedValue(0);
   const heardTarget = useSharedValue(0);
+  // Голос агента: цели приходят из Visualizer (≈20 раз в секунду), сглаживание — в каждом кадре.
+  const agentLevelTarget = useSharedValue(0);
+  const agentLevel = useSharedValue(0);
+  const agentBandsTarget = useSharedValue([0, 0, 0, 0, 0]);
+  const agentBands = useSharedValue([0, 0, 0, 0, 0]);
+  const agentFresh = useSharedValue(0);
+  const agentReal = useSharedValue(0);
 
   // Время течёт в UI-потоке со скоростью состояния: смена скорости не даёт рывка фазы.
   const clock = useFrameCallback((frame) => {
     const dt = Math.min(frame.timeSincePreviousFrame ?? 16, 50) / 1000;
     time.value = (time.value + dt * speed.value) % 3600;
-    const target = heardTarget.value;
-    const tau = target > voice.value ? ATTACK_SEC : RELEASE_SEC;
-    voice.value += (target - voice.value) * (1 - Math.exp(-dt / tau));
+    voice.value = follow(voice.value, heardTarget.value, dt, ATTACK_SEC, RELEASE_SEC);
+    agentLevel.value = follow(agentLevel.value, agentLevelTarget.value, dt, AGENT_ATTACK_SEC, AGENT_RELEASE_SEC);
+    const targets = agentBandsTarget.value;
+    agentBands.value = agentBands.value.map((band, i) => follow(band, targets[i] ?? 0, dt, AGENT_ATTACK_SEC, AGENT_RELEASE_SEC));
+    agentFresh.value = Math.max(0, agentFresh.value - dt);
+    agentReal.value = follow(agentReal.value, agentFresh.value > 0 ? 1 : 0, dt, 0.25, 0.4);
   }, false);
 
   useEffect(() => {
@@ -62,6 +83,22 @@ function ShaderWave({ active = true, height, left, level = 0, status, top, width
     dim.value = withTiming(motion.dim, stateEase);
   }, [dim, energy, motion, speak, speed, think]);
 
+  // Пока агент говорит — снимаем звук с выхода (его голос играет RuVoice в своём процессе).
+  const agentSpeaking = status === 'speaking' && active;
+  useEffect(() => {
+    if (!agentSpeaking) return;
+    const stop = listenOutputLevel(({ level: value, bands }) => {
+      agentLevelTarget.value = value;
+      agentBandsTarget.value = bands;
+      if (value > 0.04) agentFresh.value = AGENT_FRESH_SEC;
+    });
+    return () => {
+      stop?.();
+      agentLevelTarget.value = 0;
+      agentBandsTarget.value = [0, 0, 0, 0, 0];
+    };
+  }, [agentBandsTarget, agentFresh, agentLevelTarget, agentSpeaking]);
+
   const heard = motion.hearsUser ? Math.min(1, Math.max(0, level)) : 0;
   useEffect(() => {
     heardTarget.value = heard;
@@ -69,15 +106,18 @@ function ShaderWave({ active = true, height, left, level = 0, status, top, width
 
   const uniforms = useDerivedValue(() => {
     const t = time.value;
-    const front = waveFormants(t, layerSeeds.front, voice.value, speak.value);
-    const echo1 = waveFormants(t, layerSeeds.echo1, voice.value, speak.value);
-    const echo2 = waveFormants(t, layerSeeds.echo2, voice.value, speak.value);
+    const bands = agentBands.value;
+    const real = agentReal.value;
+    const front = waveFormants(t, layerSeeds.front, voice.value, speak.value, bands, real);
+    const echo1 = waveFormants(t, layerSeeds.echo1, voice.value, speak.value, bands, real);
+    const echo2 = waveFormants(t, layerSeeds.echo2, voice.value, speak.value, bands, real);
     return {
       uRes: [width, height],
       uPx: px,
       uTime: t,
       uEnergy: energy.value,
-      uLevel: voice.value,
+      // Громкость: голос пользователя или реальная громкость агента (что сейчас звучит).
+      uLevel: Math.max(voice.value, agentLevel.value * real),
       uSpeak: speak.value,
       uThink: think.value,
       uDim: dim.value,

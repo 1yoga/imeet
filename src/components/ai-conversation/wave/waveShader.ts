@@ -161,16 +161,29 @@ const heights = [0.42, 0.55, 1.0, 0.68, 0.5];
  * Форманты слоя в момент t: [центр, ширина, высота] ×5. Зависят только от времени,
  * поэтому считаются раз в кадр (worklet), а не для каждого пикселя.
  */
-export function waveFormants(t: number, seed: number, level: number, speak: number): number[][] {
+export function waveFormants(
+  t: number,
+  seed: number,
+  level: number,
+  speak: number,
+  /** Спектр голоса агента: 5 полос 0..1, от низких частот к высоким. */
+  agentBands: number[],
+  /** 1 — волна агента следует его реальному звуку, 0 — ритм речи без звука (нет доступа к выходу). */
+  agentReal: number,
+): number[][] {
   'worklet';
   const lt = t * (0.92 + 0.06 * seed);
   const out: number[][] = [];
   for (let i = 0; i < 5; i++) {
     const c = centers[i] + 0.03 * Math.sin(lt * (0.45 + 0.13 * i) + seed * 2.1 + i * 1.7);
     const osc = 0.5 + 0.5 * Math.sin(lt * (1.1 + 0.37 * i + seed * 0.3) + i * 2.3 + seed);
-    // Слоговой ритм: медленный, чтобы холмы перекатывались, а не дрожали.
+    // Голос пользователя: медленный слоговой ритм, холмы перекатываются, а не дрожат.
     const syl = 0.5 + 0.5 * Math.sin(lt * (3.2 + 0.8 * i) + seed * 3.0) * Math.sin(lt * (1.2 + 0.35 * i) + i);
-    const a = heights[i] * (0.62 + 0.38 * osc) * (1 + level * (0.5 + 1.1 * syl) + speak * (0.2 + 1.0 * syl));
+    // Голос агента: каждая форманта следует своей полосе спектра (низкие слева, высокие справа);
+    // без доступа к звуку — прежний живой ритм речи.
+    const rhythm = 0.2 + 1.0 * (0.5 + 0.5 * Math.sin(lt * (7.0 + 1.9 * i) + seed * 3.0) * Math.sin(lt * (2.3 + 0.7 * i) + i));
+    const agent = rhythm + (0.15 + 2.0 * agentBands[i] - rhythm) * agentReal;
+    const a = heights[i] * (0.62 + 0.38 * osc) * (1 + level * (0.5 + 1.1 * syl) + speak * agent);
     const w = widths[i] * (1 + 0.25 * Math.sin(lt * 0.7 + i + seed));
     out.push([c, w, a]);
   }
@@ -198,6 +211,6 @@ export const waveMotion: Record<ConversationStatus, WaveMotion> = {
   'user-speaking': { energy: 0.85, think: 0, speak: 0, dim: 0, speed: 0.7, hearsUser: true },
   recognizing: { energy: 0.5, think: 1, speak: 0, dim: 0, speed: 1.1, hearsUser: false },
   thinking: { energy: 0.45, think: 1, speak: 0, dim: 0, speed: 1.1, hearsUser: false },
-  speaking: { energy: 0.8, think: 0, speak: 1, dim: 0, speed: 0.7, hearsUser: false },
+  speaking: { energy: 0.8, think: 0, speak: 1, dim: 0, speed: 1.2, hearsUser: false },
   error: { energy: 0.35, think: 0, speak: 0, dim: 1, speed: 0.4, hearsUser: false },
 };
