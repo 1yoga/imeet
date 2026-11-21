@@ -17,7 +17,17 @@ export type DeviceVoice = {
 
 export type SystemVoice = { id: 'system'; label: string; kind: 'system' };
 
-export type VoiceOption = DeviceVoice | SystemVoice;
+/** Silero, встроенный в APK (ONNX): работает без RuVoice. Пока только для сравнения в Voice Lab. */
+export type EmbeddedVoice = { id: string; label: string; kind: 'embedded'; speaker: string };
+
+export type VoiceOption = DeviceVoice | SystemVoice | EmbeddedVoice;
+
+const embedded = (speaker: string): EmbeddedVoice => ({
+  id: `embedded-${speaker}`,
+  label: `Silero встроенный · ${speaker}`,
+  kind: 'embedded',
+  speaker,
+});
 
 const silero55 = (speaker: string): DeviceVoice => ({
   id: `silero55-${speaker}`,
@@ -38,6 +48,11 @@ const cisBase = (speaker: string): DeviceVoice => ({
 });
 
 export const voiceCatalog: readonly VoiceOption[] = [
+  embedded('xenia'),
+  embedded('kseniya'),
+  embedded('baya'),
+  embedded('aidar'),
+  embedded('eugene'),
   silero55('xenia'),
   silero55('kseniya'),
   silero55('baya'),

@@ -6,10 +6,13 @@ export const traitIcons = {
   thumbsUp: require('../../../assets/icons/ui/thumbs-up.svg'),
   graduation: require('../../../assets/icons/ui/graduation.svg'),
   heart: require('../../../assets/icons/ui/heart.svg'),
-  leaf: require('../../../assets/icons/ui/leaf.svg'),
   mountain: require('../../../assets/icons/ui/mountain.svg'),
   bowl: require('../../../assets/icons/ui/bowl.svg'),
   snowflake: require('../../../assets/icons/ui/snowflake.svg'),
+  heartPlain: require('../../../assets/icons/ui/heart-plain.svg'),
+  coffee: require('../../../assets/icons/ui/coffee.svg'),
+  bike: require('../../../assets/icons/ui/bike.svg'),
+  camera: require('../../../assets/icons/ui/camera.svg'),
 } as const;
 
 export interface Trait {
@@ -28,6 +31,9 @@ export interface Candidate {
   name: string;
   /** Имя в родительном падеже: «Уточнить у Валерии». */
   nameGenitive: string;
+  /** Имя в дательном падеже: «Напишите Артёму первым». */
+  nameDative: string;
+  sex: 'female' | 'male';
   age: number;
   city: string;
   avatar: ImageSourcePropType;
@@ -40,6 +46,11 @@ export interface Candidate {
   facts: CandidateFact[];
 }
 
+/** Слово по полу кандидата: byGender(candidate, 'ей', 'ему'). */
+export function byGender(candidate: Pick<Candidate, 'sex'>, female: string, male: string) {
+  return candidate.sex === 'female' ? female : male;
+}
+
 export function ageLabel(age: number) {
   const tens = age % 100;
   const ones = age % 10;
@@ -49,19 +60,21 @@ export function ageLabel(age: number) {
   return `${age} лет`;
 }
 
-// Тестовые данные прототипа: фото вырезаны из макетов Figma, их стоит заменить оригиналами.
+// Тестовые данные прототипа: фото Валерии из макета Figma, Артёма прислал заказчик; легенды выдуманы.
 export const candidates: Candidate[] = [
   {
     id: 'valeria',
     name: 'Валерия',
     nameGenitive: 'Валерии',
+    nameDative: 'Валерии',
+    sex: 'female',
     age: 28,
     city: 'Казань',
     avatar: require('../../../assets/candidates/valeria-avatar.jpg'),
     photos: [
       require('../../../assets/candidates/valeria-1.jpg'),
       require('../../../assets/candidates/valeria-2.jpg'),
-      require('../../../assets/candidates/valeria-avatar.jpg'),
+      require('../../../assets/candidates/valeria-3.jpg'),
     ],
     about: 'Спокойная, самодостаточная готовая к созданию семьи, без опыта в отношениях.',
     interestsText: 'Любит походы в горы и вкусно поесть. Увлекается сноубордом',
@@ -70,7 +83,7 @@ export const candidates: Candidate[] = [
       { icon: 'thumbsUp', label: 'Самодостаточная' },
       { icon: 'graduation', label: 'Образованная' },
       { icon: 'heart', label: 'Без опыта отношений' },
-      { icon: 'leaf', label: 'Спокойная' },
+      { icon: 'smile', label: 'Спокойная' },
     ],
     interests: [
       { icon: 'mountain', label: 'Поход' },
@@ -109,6 +122,76 @@ export const candidates: Candidate[] = [
       {
         pattern: /животн|кошк|собак|питом/iu,
         answer: 'У Валерии есть *кошка* Луна. Собаку она тоже хочет, но пока не хватает времени.',
+      },
+    ],
+  },
+  {
+    id: 'artem',
+    name: 'Артём',
+    nameGenitive: 'Артёма',
+    nameDative: 'Артёму',
+    sex: 'male',
+    age: 31,
+    city: 'Санкт-Петербург',
+    avatar: require('../../../assets/candidates/artem-avatar.jpg'),
+    photos: [
+      require('../../../assets/candidates/artem-1.jpg'),
+      require('../../../assets/candidates/artem-2.jpg'),
+      require('../../../assets/candidates/artem-3.jpg'),
+    ],
+    about: 'Открытый и весёлый, целеустремлённый. Хочет семью и детей, без вредных привычек.',
+    interestsText: 'Знает лучшие кофейни Петербурга и сам варит кофе. По выходным катается на велосипеде и снимает город на плёнку',
+    traits: [
+      { icon: 'smile', label: 'Общительный' },
+      { icon: 'thumbsUp', label: 'Целеустремлённый' },
+      { icon: 'graduation', label: 'Образованный' },
+      { icon: 'heartPlain', label: 'Хочет семью' },
+    ],
+    interests: [
+      { icon: 'coffee', label: 'Кофе' },
+      { icon: 'bike', label: 'Велосипед' },
+      { icon: 'camera', label: 'Плёночное фото' },
+    ],
+    facts: [
+      {
+        pattern: /коф[еэ]|кофейн|бариста|капучино|латте|эспрессо/iu,
+        answer: 'Кофе — его *главная* страсть. Дома у Артёма рожковая кофемашина, а по субботам он обходит новые кофейни на Петроградке.',
+      },
+      {
+        pattern: /велосипед|вело|катает|спорт|трениров|бег/iu,
+        answer: 'По выходным он катается на *шоссейном* велосипеде: летом доезжает до Финского залива. Зимой ходит в зал.',
+      },
+      {
+        pattern: /фото|плён|плен|камер|снима/iu,
+        answer: 'Артём снимает город на *плёночный* Зенит, который достался от деда, и сам проявляет плёнку.',
+      },
+      {
+        pattern: /работ|професс|учил|образован|универ/iu,
+        answer: 'Он окончил *СПбГАСУ* и работает архитектором: проектирует жилые дома и восстанавливает старые фасады.',
+      },
+      {
+        pattern: /семь|дет[иейя]|брак|отношен|серьёзн|серьезн/iu,
+        answer: 'Артём настроен *серьёзно*: хочет семью и двоих детей. Последние отношения закончились два года назад, расстались по-дружески.',
+      },
+      {
+        pattern: /характер|какой он|общит|темперамент|весёл|весел/iu,
+        answer: 'Он *открытый* и с юмором: легко заводит разговор, но умеет и слушать. Друзья говорят, что с ним спокойно.',
+      },
+      {
+        pattern: /кур|пь[её]т|алкогол|привыч/iu,
+        answer: 'Не курит и почти не пьёт, разве что бокал *вина* за ужином. Говорит, что кофе ему хватает.',
+      },
+      {
+        pattern: /книг|чита|фильм|кино|сериал|музык/iu,
+        answer: 'Любит *джаз* и старое кино. Из книг сейчас читает Довлатова — перечитывает уже третий раз.',
+      },
+      {
+        pattern: /животн|кошк|собак|питом/iu,
+        answer: 'У Артёма есть пёс *Бублик*, корги. Он ездит с ним в корзине велосипеда на короткие прогулки.',
+      },
+      {
+        pattern: /путешеств|поездк|отпуск|страны|отдых/iu,
+        answer: 'Любит путешествовать *на поезде*: в прошлом году проехал от Петербурга до Байкала.',
       },
     ],
   },

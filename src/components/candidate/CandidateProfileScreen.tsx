@@ -21,7 +21,7 @@ import { VoiceWave } from '@/components/ai-conversation/VoiceWave';
 import { useUserProfile } from '@/core/settings/userProfile';
 import { useAndroidVoiceInput } from '@/features/conversation/useAndroidVoiceInput';
 import { createCandidateQa } from '@/features/matches/candidateQa';
-import { ageLabel, type Candidate } from '@/features/matches/candidates';
+import { ageLabel, byGender, type Candidate } from '@/features/matches/candidates';
 import { colors, layout, typography } from '@/theme/tokens';
 
 import { AskComposer } from './AskComposer';
@@ -140,7 +140,7 @@ export function CandidateProfileScreen({ candidate }: { candidate: Candidate }) 
               <View style={styles.offer}>
                 <GlassSurface style={styles.offerGlass} />
                 <Text style={styles.offerText}>
-                  Хотите узнать еще что-то?{'\n'}Или можете отправить сообщение ей лично.
+                  Хотите узнать еще что-то?{'\n'}Или можете отправить сообщение {byGender(candidate, 'ей', 'ему')} лично.
                 </Text>
                 <Pressable
                   accessibilityRole="button"
@@ -148,8 +148,9 @@ export function CandidateProfileScreen({ candidate }: { candidate: Candidate }) 
                   style={styles.chatButton}
                 >
                   <LinearGradient
-                    colors={[colors.buttonHighlight, colors.primary]}
+                    colors={['#CCC8FB', colors.primary, colors.primary]}
                     end={{ x: 1, y: 0.5 }}
+                    locations={[0, 0.5, 1]}
                     start={{ x: 0, y: 0.5 }}
                     style={styles.chatGradient}
                   >
@@ -256,10 +257,10 @@ const styles = StyleSheet.create({
   backIcon: { height: 24, width: 24 },
   avatar: { borderRadius: 54, height: 108, width: 108 },
   city: { ...typography.subtitle, color: colors.subtitle, fontSize: 15, marginTop: 10 },
-  name: { ...typography.title, color: colors.white, fontSize: 27, fontWeight: '600', lineHeight: 33 },
+  name: { ...typography.title, color: colors.white, fontSize: 27, lineHeight: 33 },
   section: { gap: 8, paddingHorizontal: 16 },
   padded: { paddingHorizontal: 16 },
-  heading: { ...typography.title, color: colors.white, fontSize: 18, fontWeight: '600', lineHeight: 22 },
+  heading: { ...typography.heading, color: colors.white },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   photos: { gap: 10 },
   ask: { gap: 8, marginTop: 8 },
@@ -295,10 +296,19 @@ const styles = StyleSheet.create({
   },
   offerGlass: { borderRadius: 20 },
   offerText: { ...typography.subtitle, color: colors.white, fontSize: 14.5, lineHeight: 19, textAlign: 'center' },
-  chatButton: { borderRadius: 22, overflow: 'hidden' },
-  chatGradient: { alignItems: 'center', flexDirection: 'row', gap: 10, height: 42, paddingHorizontal: 26 },
-  chatIcon: { height: 22, width: 22 },
-  chatText: { ...typography.button, color: colors.white, fontSize: 15 },
+  chatButton: { borderRadius: 20, overflow: 'hidden' },
+  chatGradient: {
+    alignItems: 'center',
+    borderColor: 'rgba(255, 255, 255, 0.36)',
+    borderRadius: 20,
+    borderTopWidth: 1.5,
+    flexDirection: 'row',
+    gap: 9,
+    height: 40,
+    paddingHorizontal: 24,
+  },
+  chatIcon: { height: 18, width: 18 },
+  chatText: { ...typography.button, color: colors.white },
   listening: { alignItems: 'center', flexDirection: 'row', gap: 8, marginBottom: -8, paddingHorizontal: 20 },
   dot: { backgroundColor: colors.buttonHighlight, borderRadius: 4, height: 8, opacity: 0.6, width: 8 },
   dotHot: { backgroundColor: '#8BFFB0', opacity: 1 },

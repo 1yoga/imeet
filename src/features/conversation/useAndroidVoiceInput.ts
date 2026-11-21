@@ -22,6 +22,7 @@ import { stripFocusMarks } from '@/core/voice/focusMarks';
 import {
   defaultConversationVoiceId,
   findDeviceVoice,
+  findVoice,
   loadConversationVoiceId,
   saveConversationVoiceId,
 } from '@/core/voice/voiceCatalog';
@@ -65,7 +66,17 @@ interface Conversation {
   playbackStop?: Promise<void>;
   preparingTts?: TtsEngine;
   preparationStop?: Promise<void>;
+  /** Ответ, который перебили: если «перебивание» оказалось шумом, агент договорит его. */
+  interruptedAnswer?: string;
+  /** Было ложное перебивание (эхо, шум): до конца сеанса агента голосом не перебиваем. */
+  bargeInOff?: boolean;
 }
+
+/**
+ * Перебивание строже, чем распознавание: голос самого агента из динамика и шум
+ * не должны его останавливать. Порог уверенности Silero и сколько длится речь.
+ */
+const BARGE_IN = { vadThreshold: 0.85, minSpeechMs: 700 } as const;
 
 function prepareModel() {
   if (!speech || modelReady) return Promise.resolve();
@@ -137,21 +148,36 @@ function isSilence(error: unknown) {
   return message.includes('Речь не обнаружена') || message.includes('Речь слишком короткая');
 }
 
-/** Голос ответа: Silero из профиля через RuVoice, если он установлен, иначе системный TTS. */
-async function prepareTts(sileroVoiceId: string, sileroAvailable: boolean | null): Promise<TtsEngine | null> {
-  if (hasDeviceTts && sileroAvailable !== false) {
-    const voice = findDeviceVoice(sileroVoiceId);
+interface PreparedTts {
+  engine: TtsEngine | null;
+  /** Для какого голоса из настроек готовили: если голос сменили, готовим заново. */
+  voiceId: string;
+  /** Выбранный голос не запустился, отвечаем системным. */
+  fallback: boolean;
+}
+
+/**
+ * Голос ответа: выбранный в профиле Silero через RuVoice, иначе системный TTS.
+ * Проверка голоса может разово не пройти (RuVoice занят другой озвучкой), поэтому вторая попытка;
+ * кешированный результат прежней проверки не используется — каждый раз проверяем заново.
+ */
+async function prepareTts(voiceId: string): Promise<PreparedTts> {
+  const chosen = findVoice(voiceId);
+  if (hasDeviceTts && chosen?.kind !== 'system') {
+    const voice = findDeviceVoice(voiceId);
     const engine = createDeviceTtsEngine(voice.engine, voice.query);
-    try {
-      await engine.initialize();
-      return engine;
-    } catch {
-      // RuVoice или голос недоступен: отвечаем системным голосом.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        await engine.initialize();
+        return { engine, voiceId, fallback: false };
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
     }
   }
   const system = await loadAndroidTts();
   await system?.initialize();
-  return system;
+  return { engine: system, voiceId, fallback: hasDeviceTts && chosen?.kind !== 'system' };
 }
 
 /** Откуда берутся ответы агента: общий разговор или, например, вопросы о кандидате. */
@@ -177,6 +203,9 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   const [reply, setReply] = useState('');
   const [sileroVoiceId, setSileroVoiceId] = useState(defaultConversationVoiceId);
   const [sileroAvailable, setSileroAvailable] = useState<boolean | null>(hasDeviceTts ? null : false);
+  // Голос читается в момент озвучки (а не в начале сеанса), чтобы смена в профиле действовала сразу.
+  const voiceIdRef = useRef(defaultConversationVoiceId);
+  const [voiceNotice, setVoiceNotice] = useState('');
   const [muted, setMuted] = useState(false);
   const mutedRef = useRef(false);
   const [textBusy, setTextBusy] = useState(false);
@@ -235,7 +264,9 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   useFocusEffect(useCallback(() => {
     let mounted = true;
     void loadConversationVoiceId().then((id) => {
-      if (mounted) setSileroVoiceId(id);
+      if (!mounted) return;
+      voiceIdRef.current = id;
+      setSileroVoiceId(id);
     });
     void loadConversationSettings().then((value) => {
       if (!mounted) return;
@@ -312,6 +343,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
 
     let next: Feedback = { phase: 'idle' };
     let stage: 'permission' | 'tts' | 'recognition' = 'permission';
+    let prepared: PreparedTts | null = null;
     let tts: TtsEngine | null = null;
     // Монитор, который услышал перебивание: следующая реплика продолжается с его захвата.
     let bargeInMonitor: SpeechMonitor | null = null;
@@ -329,7 +361,9 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       }
 
       stage = 'tts';
-      tts = await prepareTts(sileroVoiceId, sileroAvailable);
+      prepared = await prepareTts(voiceIdRef.current);
+      tts = prepared.engine;
+      reportVoice(prepared);
       if (session.cancelled) return;
 
       while (!session.cancelled) {
@@ -408,14 +442,31 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         }
 
         if (session.cancelled) return;
-        if (!text) continue;
-
         const recognizedAt = Date.now();
-        const answer = replies.current!.replyTo(text);
-        setTranscript(text);
-        setReply(stripFocusMarks(answer));
-        setTimings({ recognitionMs: recognizingAt ? recognizedAt - recognizingAt : undefined });
+        let answer: string;
+        if (text) {
+          session.interruptedAnswer = undefined;
+          answer = replies.current!.replyTo(text);
+          setTranscript(text);
+          setReply(stripFocusMarks(answer));
+          setTimings({ recognitionMs: recognizingAt ? recognizedAt - recognizingAt : undefined });
+        } else if (continueFromMonitor && session.interruptedAnswer) {
+          // Агента «перебил» шум или его же голос из динамика: договариваем ответ
+          // и до конца сеанса больше не останавливаемся на звук.
+          answer = session.interruptedAnswer;
+          session.interruptedAnswer = undefined;
+          session.bargeInOff = true;
+        } else {
+          continue;
+        }
 
+        // Голос сменили в профиле — готовим озвучку заново.
+        if (prepared && prepared.voiceId !== voiceIdRef.current) {
+          prepared = await prepareTts(voiceIdRef.current);
+          tts = prepared.engine;
+          reportVoice(prepared);
+          if (session.cancelled) return;
+        }
         if (!tts || mutedRef.current) continue;
 
         stage = 'tts';
@@ -432,11 +483,12 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         // Перебивание: монитор слушает, пока агент говорит.
         let monitor: SpeechMonitor | null = null;
         let interrupted = false;
-        if (settingsRef.current.bargeIn && speech.monitorSpeech) {
+        if (settingsRef.current.bargeIn && !session.bargeInOff && speech.monitorSpeech) {
           try {
-            monitor = await speech.monitorSpeech({});
+            monitor = await speech.monitorSpeech(BARGE_IN);
             monitor.onSpeech(() => {
               interrupted = true;
+              session.interruptedAnswer = answer;
               stopPlayback(session);
               if (!session.cancelled) setFeedback({ phase: 'user-speaking' });
             });
@@ -535,7 +587,9 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       setFeedback({ phase: 'thinking' });
       const delayMs = settingsRef.current.replyDelaySec * 1000;
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
-      const tts = await prepareTts(sileroVoiceId, sileroAvailable);
+      const ready = await prepareTts(voiceIdRef.current);
+      reportVoice(ready);
+      const tts = ready.engine;
       if (!tts || mutedRef.current) return;
       const playback = await tts.speak({
         text: tts.id.startsWith('device:') ? answer : stripFocusMarks(answer),
@@ -570,9 +624,22 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   };
 
   const changeVoice = async (id: string) => {
-    await saveConversationVoiceId(id);
+    // Сначала в память (следующая реплика уже новым голосом), потом на диск.
+    voiceIdRef.current = id;
     setSileroVoiceId(id);
+    setVoiceNotice('');
+    await saveConversationVoiceId(id);
   };
+
+  /** Если выбранный голос не запустился, говорим об этом, а не молча отвечаем системным. */
+  function reportVoice(ready: PreparedTts) {
+    if (!ready.fallback) {
+      setVoiceNotice('');
+      return;
+    }
+    const voice = findVoice(ready.voiceId);
+    setVoiceNotice(`Голос «${voice?.label ?? ready.voiceId}» не запустился в RuVoice — отвечаю системным голосом.`);
+  }
 
   const updateSettings = async (changes: Partial<ConversationSettings>) => {
     const next = normalizeSettings({ ...settingsRef.current, ...changes });
@@ -611,6 +678,8 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
     sileroVoiceId,
     sileroAvailable,
     changeVoice,
+    voiceNotice,
+    clearVoiceNotice: () => setVoiceNotice(''),
     timings,
     settings,
     updateSettings,

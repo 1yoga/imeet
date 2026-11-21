@@ -4,8 +4,18 @@ plugins {
 }
 
 group = 'com.imeet.voice'
-version = '0.2.0'
+version = '0.3.0'
 
 android {
   namespace 'com.imeet.voice'
+  defaultConfig {
+    consumerProguardFiles 'consumer-rules.pro'
+  }
+}
+
+dependencies {
+  // onnxruntime той же ветки 1.27, что внутри sherpa-onnx 1.13.5 («Наслух», 1.27.1): в APK одна общая libonnxruntime.so.
+  implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.27.0'
+  // Обратное FFT для вокодера Silero (длина 2400 — не степень двойки).
+  implementation 'com.github.wendykierp:JTransforms:3.1'
 }

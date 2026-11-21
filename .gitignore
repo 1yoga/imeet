@@ -29,3 +29,9 @@ modules/*/android/build/
 
 # IDE
 .idea/
+
+# Gilroy: коммерческий шрифт, в публичный репозиторий не выкладываем (лежит только локально)
+/assets/fonts/Gilroy-*.ttf
+
+# Модели встроенного Silero (100 МБ) копирует tools\ship.cmd из artifacts\silero-onnx\result3\app-assets
+/modules/imeet-voice/android/src/main/assets/silero/

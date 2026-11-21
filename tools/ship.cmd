@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0.."
 set "VER=0.2.0"
 set "LOG=%CD%\artifacts\ship-log.txt"
-echo ship v4 > "%LOG%"
+echo ship v5 > "%LOG%"
 
 echo === 0/4 cleanup (Recycle Bin, log: artifacts\cleanup-log.txt) ===
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0cleanup.ps1" > nul
@@ -38,6 +38,18 @@ echo === typecheck (log: artifacts\typecheck-log.txt) ===
 call npx tsc --noEmit > "%CD%\artifacts\typecheck-log.txt" 2>&1
 if errorlevel 1 (echo   type errors found, see artifacts\typecheck-log.txt - building anyway) else (echo   ok)
 
+echo === embedded Silero voice: models into APK ===
+set "SILERO_SRC=%CD%\artifacts\silero-onnx\result3\app-assets"
+set "SILERO_DST=%CD%\modules\imeet-voice\android\src\main\assets\silero"
+if not exist "%SILERO_SRC%\vocoder.onnx" goto silero_missing
+if not exist "%SILERO_DST%" mkdir "%SILERO_DST%"
+robocopy "%SILERO_SRC%" "%SILERO_DST%" /MIR /NFL /NDL /NJH /NJS >nul
+echo   ok
+goto silero_done
+:silero_missing
+echo   models not found - run tools\silero-onnx\run.cmd first. Building without the embedded voice.
+:silero_done
+
 echo === 3/4 build + install APK (several minutes) ===
 set "NOPAUSE=1"
 call "%~dp0build-android.cmd"
@@ -46,7 +58,7 @@ if errorlevel 1 goto fail
 echo === 4/4 git commit ===
 git add -A
 git diff --cached --quiet && goto nothing
-git commit -m "Agent wave follows real voice, greeting after launch countdown, blurred home under profile menu; imeet-voice module, tidy up" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
+git commit -m "Embedded Silero voice (ONNX in APK) in Voice Lab; second candidate, swipe cards; Figma fonts and icons; blob background" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
 if errorlevel 1 goto fail
 goto done
 :nothing

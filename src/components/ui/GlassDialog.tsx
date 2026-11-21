@@ -3,6 +3,7 @@ import { type ReactNode, useEffect, useRef } from 'react';
 import { Animated, BackHandler, Easing, KeyboardAvoidingView, Pressable, StyleSheet, Text, View } from 'react-native';
 
 import { BlurBackdrop } from '@/components/ui/BlurBackdrop';
+import { fontFamilies } from '@/theme/fonts';
 import { colors, typography } from '@/theme/tokens';
 
 const closeIcon = require('../../../assets/icons/ui/close.svg');
@@ -106,6 +107,6 @@ const styles = StyleSheet.create({
   danger: { backgroundColor: '#C42227' },
   outline: { borderColor: 'rgba(255, 255, 255, 0.55)', borderWidth: 1 },
   dim: { opacity: 0.6 },
-  buttonText: { ...typography.button, color: colors.white, fontSize: 15, fontWeight: '500' },
+  buttonText: { ...typography.button, color: colors.white, fontFamily: fontFamilies.bodyMedium, fontSize: 15 },
   outlineText: { color: 'rgba(255, 255, 255, 0.75)' },
 });

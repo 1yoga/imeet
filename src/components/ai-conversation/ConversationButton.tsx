@@ -82,7 +82,6 @@ const styles = StyleSheet.create({
     fontFamily: typography.button.fontFamily,
     color: colors.white,
     fontSize: typography.button.fontSize,
-    fontWeight: typography.button.fontWeight,
     lineHeight: typography.button.lineHeight,
   },
   highlight: {

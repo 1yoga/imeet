@@ -16,18 +16,17 @@ export function TraitChip({ trait }: { trait: Trait }) {
 const styles = StyleSheet.create({
   chip: {
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.16)',
-    borderRadius: 12,
+    backgroundColor: 'rgba(190, 190, 190, 0.3)',
+    borderRadius: 8,
     flexDirection: 'row',
-    gap: 6,
-    height: 24,
-    paddingHorizontal: 9,
+    gap: 4,
+    height: 23,
+    paddingLeft: 8,
+    paddingRight: 9,
   },
   icon: { height: 14, width: 14 },
   label: {
     color: colors.white,
-    fontFamily: typography.info.fontFamily,
-    fontSize: 12.5,
-    lineHeight: 16,
+    ...typography.tag,
   },
 });

@@ -22,6 +22,7 @@ import { Countdown } from '@/components/ai-conversation/Countdown';
 import { InfoBanner } from '@/components/ai-conversation/InfoBanner';
 import { VoiceWave } from '@/components/ai-conversation/VoiceWave';
 import { MatchCard } from '@/components/matches/MatchCard';
+import { BlobBackground } from '@/components/ui/BlobBackground';
 import { ProfileDialogs } from '@/components/profile/ProfileDialogs';
 import { ProfileTab } from '@/components/profile/ProfileTab';
 import { ProfileVoiceSettings } from '@/components/profile/ProfileVoiceSettings';
@@ -30,6 +31,7 @@ import { SHOW_CONVERSATION_DEBUG } from '@/config/dev';
 import { useUserProfile } from '@/core/settings/userProfile';
 import { useAndroidVoiceInput } from '@/features/conversation/useAndroidVoiceInput';
 import { useAppStore } from '@/store/app-store';
+import { fontFamilies } from '@/theme/fonts';
 import { colors, layout, typography } from '@/theme/tokens';
 
 const noSoundIcon = require('../../../assets/figma/no-sound.svg');
@@ -110,6 +112,8 @@ export function AIConversationScreen() {
   const waveHeight = layout.waveHeight * scale;
   const waveWidth = layout.waveWidth * scale;
   const waveLeft = (width - layout.frameWidth * scale) / 2 + layout.waveLeft * scale;
+  const cardTop = Math.max(66 * scale, insets.top + 14);
+  const cardBottom = height - tabBarTop - 2;
 
   let banner: Banner | null = null;
   if (!voice.supported) {
@@ -120,6 +124,8 @@ export function AIConversationScreen() {
       : { text: voice.model.message, onDismiss: voice.retryModel };
   } else if (voice.phase === 'error' && voice.message) {
     banner = { text: voice.message, onDismiss: voice.clearError };
+  } else if (voice.voiceNotice) {
+    banner = { text: voice.voiceNotice, onDismiss: voice.clearVoiceNotice };
   } else if (voice.muted && voice.reply && !SHOW_CONVERSATION_DEBUG) {
     banner = { text: voice.reply };
   } else if (!textMode && isInfoVisible) {
@@ -253,7 +259,15 @@ export function AIConversationScreen() {
               top={titleTop}
             />
           ) : (
-            <MatchCard bottom={height - tabBarTop - 2} top={Math.max(66 * scale, insets.top + 14)} width={contentWidth} />
+            <>
+              <BlobBackground
+                active={focused}
+                card={{ x: layout.horizontalPadding, y: cardTop, width: contentWidth, height: height - cardTop - cardBottom, radius: 36 }}
+                height={height}
+                width={width}
+              />
+              <MatchCard bottom={cardBottom} top={cardTop} width={contentWidth} />
+            </>
           )}
 
           {!profileMenu && tabBar}
@@ -326,8 +340,8 @@ const styles = StyleSheet.create({
   },
   sendText: {
     color: colors.white,
+    fontFamily: fontFamilies.control,
     fontSize: 18,
-    fontWeight: '600',
   },
   disabled: {
     opacity: 0.45,

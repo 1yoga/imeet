@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import { Animated, Easing, Pressable, StyleSheet } from 'react-native';
 
 import { BlurBackdrop } from '@/components/ui/BlurBackdrop';
+import { gilroy } from '@/theme/fonts';
 
 /** Обратный отсчёт перед началом прослушивания (Figma 39:126, 48:283, 48:343). Тап — начать сразу. */
 export function Countdown({ value, top, onSkip }: { value: number; top: number; onSkip: () => void }) {
@@ -38,9 +39,8 @@ export function Countdown({ value, top, onSkip }: { value: number; top: number; 
 const styles = StyleSheet.create({
   digit: {
     color: '#DCDAEE',
-    fontFamily: 'sans-serif-medium',
+    fontFamily: gilroy('semibold'),
     fontSize: 84,
-    fontWeight: '600',
     left: 0,
     lineHeight: 96,
     position: 'absolute',

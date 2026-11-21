@@ -46,6 +46,9 @@ GPU-шейдер на Skia (`src/components/ai-conversation/wave/waveShader.ts`)
 `tools/wave-proto.py` (numpy, рендерит кадры). Если шейдер не скомпилировался, показывается картинка из Figma.
 Размытие под диалогами и отсчётом — `expo-blur` (`BlurTargetView`, Android 12+).
 
+Фон «Карточек симпатий» — тоже шейдер: глянцевые переливающиеся капли плывут за карточкой
+(`src/components/ui/blobShader.ts`, макет «Анимация» 73:517, прототип `tools/blob-proto.py`).
+
 ## Сборка и установка на телефон
 
 Скрипты для Windows в `tools/`:

@@ -25,7 +25,21 @@
     "plugins": [
       "expo-router",
       "expo-splash-screen",
-      "expo-font",
+      [
+        "expo-font",
+        {
+          "fonts": [
+            "./assets/fonts/Gilroy-Regular.ttf",
+            "./assets/fonts/Gilroy-Medium.ttf",
+            "./assets/fonts/Gilroy-Semibold.ttf",
+            "./assets/fonts/Gilroy-Bold.ttf",
+            "./assets/fonts/Manrope-Regular.ttf",
+            "./assets/fonts/Manrope-Medium.ttf",
+            "./assets/fonts/Manrope-SemiBold.ttf",
+            "./assets/fonts/Manrope-Bold.ttf"
+          ]
+        }
+      ],
       "expo-dev-client",
       [
         "expo-build-properties",
@@ -35,7 +49,10 @@
             "buildArchs": ["arm64-v8a"],
             "enableMinifyInReleaseBuilds": true,
             "enableShrinkResourcesInReleaseBuilds": true,
-            "enableBundleCompression": true
+            "enableBundleCompression": true,
+            "packagingOptions": {
+              "pickFirst": ["**/libonnxruntime.so"]
+            }
           }
         }
       ],

@@ -230,7 +230,7 @@ const styles = StyleSheet.create({
   divider: { backgroundColor: colors.glassBorder, height: StyleSheet.hairlineWidth },
   stepper: { alignItems: 'center', flexDirection: 'row', gap: 6 },
   stepButton: { alignItems: 'center', borderColor: colors.glassBorder, borderRadius: 16, borderWidth: 1, height: 32, justifyContent: 'center', width: 32 },
-  stepText: { color: colors.white, fontSize: 18, lineHeight: 20 },
+  stepText: { ...typography.button, color: colors.white, fontSize: 18, lineHeight: 20 },
   stepValue: { ...typography.button, color: colors.white, minWidth: 48, textAlign: 'center' },
   disabled: { opacity: 0.35 },
   toggle: { backgroundColor: colors.glassBorder, borderRadius: 14, height: 28, justifyContent: 'center', paddingHorizontal: 3, width: 48 },

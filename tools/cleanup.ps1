@@ -41,7 +41,8 @@ Get-ChildItem $art -File | Where-Object {
   'tools\add-wave-engine.cmd',                 # движок волны уже стоит
   'tools\update-naslukh.cmd',                  # «Наслух» теперь из npm
   'tools\use-published-naslukh.cmd',
-  'vendor'                                     # пустая папка от локального архива «Наслух»
+  'vendor',                                    # пустая папка от локального архива «Наслух»
+  'assets\icons\ui\leaf.svg'                   # «Спокойная» в макете с иконкой лица, лист не нужен
 ) | ForEach-Object { Recycle (Join-Path $root $_) }
 
 # 4. Служебные метаданные C2PA в картинках (добавляются при передаче файлов из облака Claude):

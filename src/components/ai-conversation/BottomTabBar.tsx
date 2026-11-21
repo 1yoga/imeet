@@ -141,7 +141,6 @@ const styles = StyleSheet.create({
     flexShrink: 1,
     fontFamily: typography.tab.fontFamily,
     fontSize: typography.tab.fontSize,
-    fontWeight: typography.tab.fontWeight,
     lineHeight: typography.tab.lineHeight,
     textAlign: 'center',
     zIndex: 1,

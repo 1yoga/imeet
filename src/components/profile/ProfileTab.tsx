@@ -141,9 +141,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   pencil: { height: 22, width: 22 },
-  uploadIcon: { height: 26, width: 26 },
+  uploadIcon: { height: 24, width: 24 },
   headerText: { flex: 1, gap: 2 },
-  name: { ...typography.title, color: colors.white, fontSize: 18, fontWeight: '600', lineHeight: 22 },
+  name: { ...typography.heading, color: colors.white },
   city: { ...typography.subtitle, color: colors.subtitle, fontSize: 15 },
   error: { ...typography.info, color: '#FF8A8A', fontSize: 12 },
   row: {

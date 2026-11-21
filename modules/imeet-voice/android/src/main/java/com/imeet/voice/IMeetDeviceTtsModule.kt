@@ -5,6 +5,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.speech.tts.Voice
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
@@ -49,8 +50,9 @@ class IMeetDeviceTtsModule : Module() {
     AsyncFunction("speak") { enginePackage: String, voiceQuery: String, text: String, requestId: Int, promise: Promise ->
       main.post {
         if (activePromise != null) {
-          promise.reject("ERR_DEVICE_TTS_BUSY", "Озвучка уже идёт", null)
-          return@post
+          // Новая реплика сменяет недоговорённую (как QUEUE_FLUSH), а не отклоняется.
+          active?.stop()
+          finish("stopped")
         }
         if (text.isBlank() || text.length > 500) {
           promise.reject("ERR_DEVICE_TTS_TEXT", "Некорректная длина реплики", null)
@@ -123,9 +125,15 @@ class IMeetDeviceTtsModule : Module() {
     }
   }
 
-  private fun selectVoice(tts: TextToSpeech, query: String) = tts.voices
-    ?.filter { it.locale.language == "ru" }
-    ?.firstOrNull { query.isEmpty() || it.name.equals(query, true) || it.name.endsWith("/$query", true) || it.name.endsWith("-$query", true) }
+  /** Сначала точное имя голоса, затем имя с префиксом движка (`…/xenia-ru`, `…-xenia-ru`, `…_xenia-ru`). */
+  private fun selectVoice(tts: TextToSpeech, query: String): Voice? {
+    val russian = tts.voices?.filter { it.locale.language == "ru" } ?: return null
+    if (query.isEmpty()) return russian.firstOrNull()
+    return russian.firstOrNull { it.name.equals(query, true) }
+      ?: russian.firstOrNull { voice ->
+        listOf("/", "-", "_").any { voice.name.endsWith("$it$query", true) }
+      }
+  }
 
   private companion object {
     val RUSSIAN: Locale = Locale.forLanguageTag("ru-RU")

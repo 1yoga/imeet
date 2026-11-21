@@ -92,13 +92,13 @@ const styles = StyleSheet.create({
   },
   send: {
     alignItems: 'center',
-    backgroundColor: '#3A2FA8',
-    borderRadius: 19,
-    height: 38,
+    backgroundColor: 'rgba(131, 112, 255, 0.4)',
+    borderRadius: 18,
+    height: 36,
     justifyContent: 'center',
-    width: 38,
+    width: 36,
   },
   sendBox: { marginBottom: 2 },
-  sendIcon: { height: 20, width: 20 },
+  sendIcon: { height: 14, width: 14 },
   disabled: { opacity: 0.45 },
 });

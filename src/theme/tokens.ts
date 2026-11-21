@@ -34,30 +34,35 @@ export const typography = {
     fontFamily: fontFamilies.title,
     fontSize: 24,
     lineHeight: 29,
-    fontWeight: '400' as const,
   },
   subtitle: {
     fontFamily: fontFamilies.body,
     fontSize: 16,
     lineHeight: 22,
-    fontWeight: '400' as const,
   },
   button: {
     fontFamily: fontFamilies.control,
     fontSize: 14,
     lineHeight: 18,
-    fontWeight: '600' as const,
   },
   info: {
     fontFamily: fontFamilies.body,
     fontSize: 14,
     lineHeight: 17,
-    fontWeight: '400' as const,
   },
   tab: {
-    fontFamily: fontFamilies.control,
+    fontFamily: fontFamilies.controlRegular,
     fontSize: 10,
     lineHeight: 12,
-    fontWeight: '400' as const,
+  },
+  heading: {
+    fontFamily: fontFamilies.heading,
+    fontSize: 18,
+    lineHeight: 22,
+  },
+  tag: {
+    fontFamily: fontFamilies.tag,
+    fontSize: 12,
+    lineHeight: 15,
   },
 } as const;

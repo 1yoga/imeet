@@ -75,7 +75,7 @@ export function ChatScreen({ candidate }: { candidate: Candidate }) {
           keyExtractor={(item) => item.id}
           ListFooterComponent={messages.length === 0 ? (
             <View style={styles.empty}>
-              <Text style={styles.emptyTitle}>Напишите {candidate.nameGenitive} первым</Text>
+              <Text style={styles.emptyTitle}>Напишите {candidate.nameDative} первым</Text>
               <Text style={styles.emptyText}>Можно начать с того, о чём вы спрашивали агента.</Text>
             </View>
           ) : null}
@@ -125,7 +125,7 @@ const styles = StyleSheet.create({
   backIcon: { height: 24, width: 24 },
   who: { alignItems: 'center', flexDirection: 'row', gap: 12 },
   avatar: { borderRadius: 20, height: 40, width: 40 },
-  name: { ...typography.title, color: colors.white, fontSize: 18, fontWeight: '600', lineHeight: 22 },
+  name: { ...typography.heading, color: colors.white },
   city: { ...typography.info, color: colors.subtitle, fontSize: 13 },
   list: { gap: 10, paddingVertical: 16 },
   empty: { alignItems: 'center', gap: 6, paddingHorizontal: 32, paddingVertical: 40 },
@@ -154,7 +154,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 9,
   },
-  send: { alignItems: 'center', backgroundColor: '#3A2FA8', borderRadius: 21, height: 42, justifyContent: 'center', width: 42 },
-  sendIcon: { height: 20, width: 20 },
+  send: { alignItems: 'center', backgroundColor: 'rgba(131, 112, 255, 0.4)', borderRadius: 21, height: 42, justifyContent: 'center', width: 42 },
+  sendIcon: { height: 16, width: 16 },
   disabled: { opacity: 0.45 },
 });

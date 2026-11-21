@@ -24,7 +24,15 @@ import {
   voiceCatalog,
 } from '@/core/voice/voiceCatalog';
 import { stripFocusMarks } from '@/core/voice/focusMarks';
+import {
+  embeddedSileroStatus,
+  hasEmbeddedSilero,
+  loadEmbeddedSilero,
+  playEmbeddedSilero,
+  stopEmbeddedSilero,
+} from '@/core/voice/sileroEmbedded';
 import { hasVoiceMetrics, snapshotAppMemory } from '@/core/voice/voiceMetrics';
+import { fontFamilies } from '@/theme/fonts';
 import { colors, typography } from '@/theme/tokens';
 
 type Score = 1 | 2 | 3 | 4 | 5;
@@ -34,6 +42,9 @@ type RunMetrics = {
   voice: string;
   phrase: string;
   firstFrameMs?: number;
+  synthMs?: number;
+  audioMs?: number;
+  accented?: string;
   appPssKb?: number;
   error?: string;
   state: 'preparing' | 'playing' | 'completed' | 'stopped' | 'error';
@@ -81,6 +92,7 @@ export function VoiceLabScreen() {
   const [voice, setVoice] = useState(defaultConversationVoiceId);
   const [conversationVoice, setConversationVoice] = useState(defaultConversationVoiceId);
   const [deviceVoice, setDeviceVoice] = useState<{ available: boolean; reason: string } | null>(null);
+  const [embeddedState, setEmbeddedState] = useState<{ ready: boolean; text: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
   const [history, setHistory] = useState<RunMetrics[]>([]);
@@ -106,6 +118,27 @@ export function VoiceLabScreen() {
     });
     return () => { mounted = false; };
   }, []);
+
+  useEffect(() => {
+    if (findVoice(voice)?.kind !== 'embedded') return;
+    let mounted = true;
+    setEmbeddedState(null);
+    void (async () => {
+      try {
+        const status = await embeddedSileroStatus();
+        if (!status.bundled) {
+          if (mounted) setEmbeddedState({ ready: false, text: hasEmbeddedSilero ? 'Модели не вложены в эту сборку: запустите tools\\silero-onnx\\run.cmd и пересоберите APK.' : 'Нужна новая Android-сборка iMeet.' });
+          return;
+        }
+        if (mounted) setEmbeddedState({ ready: false, text: 'Загружаем модели в память…' });
+        const { loadMs } = await loadEmbeddedSilero();
+        if (mounted) setEmbeddedState({ ready: true, text: `Готово. Загрузка моделей: ${loadMs} мс (один раз за запуск приложения).` });
+      } catch (error) {
+        if (mounted) setEmbeddedState({ ready: false, text: `Не удалось запустить: ${error instanceof Error ? error.message : String(error)}` });
+      }
+    })();
+    return () => { mounted = false; };
+  }, [voice]);
 
   useEffect(() => {
     const candidate = findVoice(voice);
@@ -135,6 +168,7 @@ export function VoiceLabScreen() {
   useEffect(() => () => {
     void systemTtsRef.current?.stop();
     void stopDeviceVoice();
+    void stopEmbeddedSilero();
   }, []);
 
   const rate = (criterion: Criterion, score: Score) => {
@@ -158,6 +192,8 @@ export function VoiceLabScreen() {
     if (!busyRef.current) return;
     if (playingVoiceRef.current === 'system') {
       await playbackRef.current?.stop();
+    } else if (findVoice(playingVoiceRef.current ?? '')?.kind === 'embedded') {
+      await stopEmbeddedSilero();
     } else {
       await stopDeviceVoice();
     }
@@ -170,6 +206,7 @@ export function VoiceLabScreen() {
     if (!candidate) return;
     if (candidate.kind === 'device' && !deviceVoice?.available) return;
     if (candidate.kind === 'system' && !hasAndroidTts) return;
+    if (candidate.kind === 'embedded' && !embeddedState?.ready) return;
 
     busyRef.current = true;
     playingVoiceRef.current = voice;
@@ -200,6 +237,11 @@ export function VoiceLabScreen() {
         playbackRef.current = handle;
         const result = await handle.finished;
         updateRun({ state: result });
+      } else if (candidate.kind === 'embedded') {
+        const result = await playEmbeddedSilero(spokenText, candidate.speaker, ({ firstFrameMs, synthMs, audioMs, accented }) => {
+          updateRun({ firstFrameMs, synthMs, audioMs, accented, state: 'playing' });
+        });
+        updateRun({ state: result });
       } else {
         const result = await playDeviceVoice(candidate.engine, candidate.query, spokenText, newDeviceRequestId(), (firstFrameMs) => {
           updateRun({ firstFrameMs, state: 'playing' });
@@ -226,8 +268,10 @@ export function VoiceLabScreen() {
   const candidate = findVoice(voice);
   const canPlay = candidate?.kind === 'system' ? hasAndroidTts
     : candidate?.kind === 'device' ? hasDeviceTts && Boolean(deviceVoice?.available)
+    : candidate?.kind === 'embedded' ? Boolean(embeddedState?.ready)
     : false;
-  const availability = candidate?.kind !== 'device' ? ''
+  const availability = candidate?.kind === 'embedded' ? (embeddedState?.text ?? 'Проверяем встроенный голос…')
+    : candidate?.kind !== 'device' ? ''
     : deviceVoice === null ? 'Проверяем голос на устройстве…'
     : deviceVoice.available
       ? candidate.pack === 'cis_ru'
@@ -292,9 +336,15 @@ export function VoiceLabScreen() {
             <Text style={styles.heading}>Последний запуск · {voiceLabel(metrics.voice)}</Text>
             <Text style={styles.sampleText}>{metrics.phrase}</Text>
             <Text style={styles.metric}>Задержка до начала звука: {metrics.firstFrameMs === undefined ? '—' : `${metrics.firstFrameMs} мс`}</Text>
+            {metrics.synthMs !== undefined && (
+              <Text style={styles.metric}>Синтез: {metrics.synthMs} мс на {metrics.audioMs} мс звука ({metrics.audioMs ? (metrics.synthMs / metrics.audioMs).toFixed(2) : '—'} от реального времени)</Text>
+            )}
+            {metrics.accented ? <Text style={styles.note}>Ударения: {metrics.accented}</Text> : null}
             <Text style={styles.metric}>Память процесса iMeet (PSS): {metrics.appPssKb === undefined ? '—' : `${Math.round(metrics.appPssKb / 1024)} МиБ`}</Text>
             <Text style={styles.note}>{metrics.state === 'error' ? `Воспроизведение не удалось: ${metrics.error ?? 'неизвестная ошибка'}` : metrics.state === 'preparing' ? 'Подготавливаем звук…' : metrics.state === 'playing' ? 'Идёт озвучка…' : metrics.state === 'stopped' ? 'Остановлено.' : 'Готово.'}</Text>
-            <Text style={styles.note}>Время до начала измерено по событию onStart Android TTS: движок синтезирует фразу целиком, поэтому оно включает весь синтез. RuVoice работает в своём процессе, его память в PSS iMeet не входит.</Text>
+            <Text style={styles.note}>{findVoice(metrics.voice)?.kind === 'embedded'
+              ? 'Встроенный голос синтезирует фразу целиком внутри iMeet: задержка включает весь синтез, а память моделей входит в PSS iMeet.'
+              : 'Время до начала измерено по событию onStart Android TTS: движок синтезирует фразу целиком, поэтому оно включает весь синтез. RuVoice работает в своём процессе, его память в PSS iMeet не входит.'}</Text>
           </View>
         )}
 
@@ -342,30 +392,30 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.backgroundTop },
   content: { paddingHorizontal: 20, gap: 12 },
   back: { alignSelf: 'flex-start', paddingVertical: 8 },
-  backText: { color: colors.buttonHighlight, fontSize: 16 },
+  backText: { fontFamily: fontFamilies.body, color: colors.buttonHighlight, fontSize: 16 },
   title: { color: colors.white, fontFamily: typography.title.fontFamily, fontSize: 32 },
-  description: { color: colors.subtitle, fontSize: 15, lineHeight: 22, marginBottom: 8 },
-  heading: { color: colors.white, fontSize: 18, fontWeight: '600', marginTop: 10 },
+  description: { fontFamily: fontFamilies.body, color: colors.subtitle, fontSize: 15, lineHeight: 22, marginBottom: 8 },
+  heading: { ...typography.heading, color: colors.white, marginTop: 10 },
   voiceGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   voiceChip: { borderColor: colors.glassBorder, borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10 },
   selectedChip: { backgroundColor: colors.infoBackground, borderColor: colors.buttonHighlight },
-  chipText: { color: colors.white, fontSize: 15 },
+  chipText: { fontFamily: fontFamilies.body, color: colors.white, fontSize: 15 },
   disabled: { opacity: 0.45 },
-  note: { color: colors.subtitle, fontSize: 13, lineHeight: 19 },
+  note: { fontFamily: fontFamilies.body, color: colors.subtitle, fontSize: 13, lineHeight: 19 },
   sampleRow: { alignItems: 'center', borderColor: colors.glassBorder, borderRadius: 14, borderWidth: 1, flexDirection: 'row', gap: 12, padding: 12 },
   sampleCopy: { flex: 1, gap: 4 },
-  sampleLabel: { color: colors.buttonHighlight, fontSize: 13, fontWeight: '600' },
-  sampleText: { color: colors.white, fontSize: 15, lineHeight: 21 },
+  sampleLabel: { color: colors.buttonHighlight, fontFamily: fontFamilies.control, fontSize: 13 },
+  sampleText: { fontFamily: fontFamilies.body, color: colors.white, fontSize: 15, lineHeight: 21 },
   playSmall: { alignItems: 'center', backgroundColor: colors.primary, borderRadius: 24, height: 42, justifyContent: 'center', width: 42 },
-  playSmallText: { color: colors.white, fontSize: 18 },
+  playSmallText: { fontFamily: fontFamilies.body, color: colors.white, fontSize: 18 },
   stopButton: { alignItems: 'center', borderColor: colors.glassBorder, borderRadius: 14, borderWidth: 1, padding: 15 },
-  primaryText: { color: colors.white, fontSize: 16, fontWeight: '600' },
+  primaryText: { color: colors.white, fontFamily: fontFamilies.control, fontSize: 16 },
   card: { backgroundColor: colors.infoBackground, borderRadius: 16, gap: 8, padding: 16 },
-  metric: { color: colors.white, fontSize: 15 },
+  metric: { fontFamily: fontFamilies.body, color: colors.white, fontSize: 15 },
   ratingRow: { gap: 8, marginTop: 6 },
-  ratingLabel: { color: colors.subtitle, fontSize: 15 },
+  ratingLabel: { fontFamily: fontFamilies.body, color: colors.subtitle, fontSize: 15 },
   scoreRow: { flexDirection: 'row', gap: 8 },
   score: { alignItems: 'center', borderColor: colors.glassBorder, borderRadius: 10, borderWidth: 1, flex: 1, paddingVertical: 10 },
   selectedScore: { backgroundColor: colors.primary, borderColor: colors.buttonHighlight },
-  scoreText: { color: colors.white, fontSize: 15 },
+  scoreText: { fontFamily: fontFamilies.body, color: colors.white, fontSize: 15 },
 });
