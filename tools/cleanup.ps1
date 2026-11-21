@@ -42,7 +42,9 @@ Get-ChildItem $art -File | Where-Object {
   'tools\update-naslukh.cmd',                  # «Наслух» теперь из npm
   'tools\use-published-naslukh.cmd',
   'vendor',                                    # пустая папка от локального архива «Наслух»
-  'assets\icons\ui\leaf.svg'                   # «Спокойная» в макете с иконкой лица, лист не нужен
+  'assets\icons\ui\leaf.svg',                  # «Спокойная» в макете с иконкой лица, лист не нужен
+  'tools\silero-onnx\export_onnx.py',          # первые пробы экспорта Silero; рабочий скрипт — export_v3.py
+  'tools\silero-onnx\export_v2.py'
 ) | ForEach-Object { Recycle (Join-Path $root $_) }
 
 # 4. Служебные метаданные C2PA в картинках (добавляются при передаче файлов из облака Claude):

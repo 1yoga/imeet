@@ -14,8 +14,10 @@ android {
 }
 
 dependencies {
-  // onnxruntime той же ветки 1.27, что внутри sherpa-onnx 1.13.5 («Наслух», 1.27.1): в APK одна общая libonnxruntime.so.
-  implementation 'com.microsoft.onnxruntime:onnxruntime-android:1.27.0'
+  // Своей libonnxruntime.so не везём: используем ту, что уже приносит sherpa-onnx 1.13.5 («Наслух», onnxruntime 1.27.1).
+  // Из пакета onnxruntime-android 1.27.0 взяты только Java-классы и JNI-прослойка; в прослойке метка версии
+  // функций VERS_1.27.0 заменена на VERS_1.27.1 (интерфейс тот же, ветка 1.27). Как сделано: tools/silero-onnx/README-ort.md
+  implementation files('libs/onnxruntime-android-1.27.0-classes.jar')
   // Обратное FFT для вокодера Silero (длина 2400 — не степень двойки).
   implementation 'com.github.wendykierp:JTransforms:3.1'
 }
