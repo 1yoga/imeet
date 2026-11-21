@@ -14,24 +14,25 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { hasAndroidTts, loadAndroidTts } from '@/core/voice/androidTts';
 import type { TtsEngine, TtsPlaybackHandle } from '@/core/voice/contracts';
-import { hasDeviceTts, inspectDeviceVoice, newDeviceRequestId, playDeviceVoice, stopDeviceVoice } from '@/core/voice/deviceTts';
 import {
   defaultConversationVoiceId,
   findVoice,
-  installHint,
   loadConversationVoiceId,
   saveConversationVoiceId,
   voiceCatalog,
 } from '@/core/voice/voiceCatalog';
 import { stripFocusMarks } from '@/core/voice/focusMarks';
 import {
+  downloadEmbeddedSilero,
   embeddedSileroStatus,
   hasEmbeddedSilero,
   loadEmbeddedSilero,
   playEmbeddedSilero,
   stopEmbeddedSilero,
 } from '@/core/voice/sileroEmbedded';
-import { hasVoiceMetrics, snapshotAppMemory } from '@/core/voice/voiceMetrics';
+import { noPauses, ruVoicePauses } from '@/core/voice/sileroEmbedded';
+import type { SileroSplit } from '@/core/voice/sileroEmbedded';
+import { hasVoiceMetrics, logVoiceMetric, snapshotAppMemory, voiceMetricsLogInfo } from '@/core/voice/voiceMetrics';
 import { fontFamilies } from '@/theme/fonts';
 import { colors, typography } from '@/theme/tokens';
 
@@ -45,6 +46,20 @@ type RunMetrics = {
   synthMs?: number;
   audioMs?: number;
   accented?: string;
+  types?: string;
+  chunked?: boolean;
+  split?: SileroSplit;
+  pausesProfile?: 'none' | 'ruvoice';
+  pitch?: number;
+  rules?: boolean;
+  recordName?: string;
+  firstAudioMs?: number;
+  chunks?: number;
+  gapMs?: number;
+  totalSynthMs?: number;
+  totalAudioMs?: number;
+  focusSymbols?: number;
+  homographs?: boolean;
   appPssKb?: number;
   error?: string;
   state: 'preparing' | 'playing' | 'completed' | 'stopped' | 'error';
@@ -58,12 +73,14 @@ const criteria = [
   { id: 'emotion', label: 'Эмоции' },
 ] as const;
 const samples = [
-  { label: 'История и вопрос', text: 'Вчера вечером мы с Женей гуляли в Новосибирске и случайно увидели старинный замок на холме. Когда подошли ближе, заметили тяжёлый замок на деревянной двери. Ты бы решился открыть её и узнать, что спрятано внутри?' },
-  { label: 'Встреча и эмоции', text: 'Как же здорово, что ты наконец приехал! Я так обрадовался, что сразу позвонил друзьям и рассказал им удивительную новость. Давай спокойно выпьем чаю, посмеёмся над старой историей и решим, куда отправимся завтра?' },
-  { label: 'Короткий вопрос', text: 'А ты любишь гулять по вечерам?' },
-  { label: 'Тот же вопрос с выделением', text: 'А ты *любишь* гулять по вечерам?' },
-  { label: 'Выбор с выделением', text: 'Тебе интереснее новый *город* или *природа*?' },
+  { label: 'История', text: 'Вчера вечером мы с Женей гуляли в Новосибирске и случайно увидели старинный замок на холме. Когда подошли ближе, заметили тяжёлый замок на деревянной двери. Ты бы решился открыть её и узнать, что спрятано внутри?' },
+  { label: 'Эмоции', text: 'Как же здорово, что ты наконец приехал! Я так обрадовался, что сразу позвонил друзьям и рассказал им удивительную новость. Давай спокойно выпьем чаю, посмеёмся над старой историей и решим, куда отправимся завтра?' },
+  { label: 'Знакомство', text: 'Привет! Рада, что ты написал. Расскажи, чем ты любишь заниматься по выходным?' },
   { label: 'Реакции', text: 'Понятно. Вот как! Ага, понимаю. Ничего себе!' },
+  { label: 'Утверждение', text: 'Ты из Новосибирска.' },
+  { label: 'Вопрос', text: 'Ты из Новосибирска?' },
+  { label: 'Выбор', text: 'Пойдём в кино или в театр?' },
+  { label: 'Переспрос', text: 'Ты ведь любишь кофе, правда?' },
 ] as const;
 const voiceIds = voiceCatalog.map(({ id }) => id);
 const voiceLabel = (id: string) => findVoice(id)?.label ?? id;
@@ -91,11 +108,15 @@ export function VoiceLabScreen() {
   const insets = useSafeAreaInsets();
   const [voice, setVoice] = useState(defaultConversationVoiceId);
   const [conversationVoice, setConversationVoice] = useState(defaultConversationVoiceId);
-  const [deviceVoice, setDeviceVoice] = useState<{ available: boolean; reason: string } | null>(null);
   const [embeddedState, setEmbeddedState] = useState<{ ready: boolean; text: string } | null>(null);
+  // Встроенный голос всегда в лучшем режиме: по фразам, словари чтения, без доп. пауз, высота ×1.00.
+  const split: SileroSplit = 'phrases';
+  const pausesProfile = 'none' as 'none' | 'ruvoice';
+  const pitch = 1;
+  const rules = true;
+  const [logRecords, setLogRecords] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [metrics, setMetrics] = useState<RunMetrics | null>(null);
-  const [history, setHistory] = useState<RunMetrics[]>([]);
   const [ratings, setRatings] = useState<Ratings>({});
   const [ratingsLoaded, setRatingsLoaded] = useState(false);
   const [storageError, setStorageError] = useState('');
@@ -113,6 +134,9 @@ export function VoiceLabScreen() {
     }).catch(() => {
       if (mounted) setStorageError('Не удалось прочитать сохранённые оценки.');
     });
+    void voiceMetricsLogInfo().then((info) => {
+      if (mounted && info) setLogRecords(info.records);
+    }).catch(() => undefined);
     void loadConversationVoiceId().then((id) => {
       if (mounted) setConversationVoice(id);
     });
@@ -127,8 +151,13 @@ export function VoiceLabScreen() {
       try {
         const status = await embeddedSileroStatus();
         if (!status.bundled) {
-          if (mounted) setEmbeddedState({ ready: false, text: hasEmbeddedSilero ? 'Модели не вложены в эту сборку: запустите tools\\silero-onnx\\run.cmd и пересоберите APK.' : 'Нужна новая Android-сборка iMeet.' });
-          return;
+          if (!hasEmbeddedSilero) {
+            if (mounted) setEmbeddedState({ ready: false, text: 'Нужна новая Android-сборка iMeet.' });
+            return;
+          }
+          await downloadEmbeddedSilero((progress, message) => {
+            if (mounted) setEmbeddedState({ ready: false, text: `${message} (${Math.round(progress * 100)}%)` });
+          });
         }
         if (mounted) setEmbeddedState({ ready: false, text: 'Загружаем модели в память…' });
         const { loadMs } = await loadEmbeddedSilero();
@@ -137,22 +166,6 @@ export function VoiceLabScreen() {
         if (mounted) setEmbeddedState({ ready: false, text: `Не удалось запустить: ${error instanceof Error ? error.message : String(error)}` });
       }
     })();
-    return () => { mounted = false; };
-  }, [voice]);
-
-  useEffect(() => {
-    const candidate = findVoice(voice);
-    if (candidate?.kind !== 'device') {
-      setDeviceVoice(null);
-      return;
-    }
-    let mounted = true;
-    setDeviceVoice(null);
-    void inspectDeviceVoice(candidate.engine, candidate.query).then((result) => {
-      if (mounted) setDeviceVoice(result);
-    }).catch((error) => {
-      if (mounted) setDeviceVoice({ available: false, reason: error instanceof Error ? error.message : 'Движок не отвечает' });
-    });
     return () => { mounted = false; };
   }, [voice]);
 
@@ -167,7 +180,6 @@ export function VoiceLabScreen() {
 
   useEffect(() => () => {
     void systemTtsRef.current?.stop();
-    void stopDeviceVoice();
     void stopEmbeddedSilero();
   }, []);
 
@@ -192,26 +204,33 @@ export function VoiceLabScreen() {
     if (!busyRef.current) return;
     if (playingVoiceRef.current === 'system') {
       await playbackRef.current?.stop();
-    } else if (findVoice(playingVoiceRef.current ?? '')?.kind === 'embedded') {
-      await stopEmbeddedSilero();
     } else {
-      await stopDeviceVoice();
+      await stopEmbeddedSilero();
     }
   };
 
-  const play = async (text: string, phrase: string) => {
+  type PlayOptions = { voiceId?: string; recordName?: string; split?: SileroSplit; pausesProfile?: 'none' | 'ruvoice'; pitch?: number; rules?: boolean };
+
+  const play = async (text: string, phrase: string, options: PlayOptions = {}) => {
     const spokenText = text.trim();
     if (!spokenText || spokenText.length > 500 || busyRef.current) return;
-    const candidate = findVoice(voice);
+    const voiceId = options.voiceId ?? voice;
+    const candidate = findVoice(voiceId);
     if (!candidate) return;
-    if (candidate.kind === 'device' && !deviceVoice?.available) return;
     if (candidate.kind === 'system' && !hasAndroidTts) return;
-    if (candidate.kind === 'embedded' && !embeddedState?.ready) return;
+    if (candidate.kind === 'embedded' && !options.voiceId && !embeddedState?.ready) return;
+    const useSplit = options.split ?? split;
+    const useChunked = useSplit !== 'whole';
+    const usePauses = options.pausesProfile ?? pausesProfile;
+    const usePitch = options.pitch ?? pitch;
+    const useRules = options.rules ?? rules;
+    const recordName = options.recordName ?? '';
 
     busyRef.current = true;
-    playingVoiceRef.current = voice;
+    playingVoiceRef.current = voiceId;
     setBusy(true);
-    let run: RunMetrics = { voice, phrase, state: 'preparing' };
+    let run: RunMetrics = { voice: voiceId, phrase, state: 'preparing', ...(recordName ? { recordName } : {}) };
+    const requestedAt = performance.now();
     const updateRun = (changes: Partial<RunMetrics>) => {
       run = { ...run, ...changes };
       setMetrics(run);
@@ -237,14 +256,20 @@ export function VoiceLabScreen() {
         playbackRef.current = handle;
         const result = await handle.finished;
         updateRun({ state: result });
-      } else if (candidate.kind === 'embedded') {
-        const result = await playEmbeddedSilero(spokenText, candidate.speaker, ({ firstFrameMs, synthMs, audioMs, accented }) => {
-          updateRun({ firstFrameMs, synthMs, audioMs, accented, state: 'playing' });
-        });
-        updateRun({ state: result });
       } else {
-        const result = await playDeviceVoice(candidate.engine, candidate.query, spokenText, newDeviceRequestId(), (firstFrameMs) => {
-          updateRun({ firstFrameMs, state: 'playing' });
+        updateRun({ chunked: useChunked, split: useSplit, pausesProfile: usePauses, pitch: usePitch, rules: useRules });
+        const result = await playEmbeddedSilero(spokenText, candidate.speaker, {
+          split: useSplit,
+          pauses: usePauses === 'ruvoice' ? ruVoicePauses : noPauses,
+          pitch: usePitch,
+          rules: useRules,
+          recordName,
+          onStart: ({ firstFrameMs, synthMs, audioMs, accented, types }) => {
+            updateRun({ firstFrameMs, synthMs, audioMs, accented, types, state: 'playing' });
+          },
+          onDone: ({ synthMs, audioMs, accented, types, chunks, gapMs, focusSymbols, homographs }) => {
+            updateRun({ totalSynthMs: synthMs, totalAudioMs: audioMs, accented, types, chunks, gapMs, focusSymbols, homographs });
+          },
         });
         updateRun({ state: result });
       }
@@ -257,7 +282,15 @@ export function VoiceLabScreen() {
           updateRun({ appPssKb });
         } catch { /* Metrics remain unavailable on unsupported builds. */ }
       }
-      setHistory((current) => [run, ...current].slice(0, 20));
+      // Каждый запуск — в журнал на телефоне (для всех голосов, не только встроенного).
+      const records = await logVoiceMetric('voicelab_run', {
+        ...run,
+        text: spokenText,
+        textChars: spokenText.length,
+        engine: candidate.kind,
+        wallMs: Math.round(performance.now() - requestedAt),
+      });
+      if (records !== null) setLogRecords(records);
       playbackRef.current = null;
       playingVoiceRef.current = null;
       busyRef.current = false;
@@ -267,17 +300,9 @@ export function VoiceLabScreen() {
 
   const candidate = findVoice(voice);
   const canPlay = candidate?.kind === 'system' ? hasAndroidTts
-    : candidate?.kind === 'device' ? hasDeviceTts && Boolean(deviceVoice?.available)
     : candidate?.kind === 'embedded' ? Boolean(embeddedState?.ready)
     : false;
-  const availability = candidate?.kind === 'embedded' ? (embeddedState?.text ?? 'Проверяем встроенный голос…')
-    : candidate?.kind !== 'device' ? ''
-    : deviceVoice === null ? 'Проверяем голос на устройстве…'
-    : deviceVoice.available
-      ? candidate.pack === 'cis_ru'
-        ? 'Готово через пакет cis_ru в RuVoice. Он использует вариант v5_cis_base_nostress.'
-        : 'Движок и голос готовы.'
-      : `${installHint(candidate)} ${deviceVoice.reason}`;
+  const availability = candidate?.kind === 'embedded' ? (embeddedState?.text ?? 'Проверяем встроенный голос…') : '';
 
   return (
     <View style={styles.screen}>
@@ -287,7 +312,6 @@ export function VoiceLabScreen() {
           <Text style={styles.backText}>‹ Назад к разговору</Text>
         </Pressable>
         <Text style={styles.title}>Voice Lab</Text>
-        <Text style={styles.description}>Сравните русское звучание на одинаковых репликах и оцените каждый голос.</Text>
 
         <Text style={styles.heading}>Голос</Text>
         <View accessibilityLabel="Голоса" accessibilityRole="radiogroup" style={styles.voiceGrid}>
@@ -305,14 +329,16 @@ export function VoiceLabScreen() {
           ))}
         </View>
         {availability ? <Text accessibilityLiveRegion="polite" style={styles.note}>{availability}</Text> : null}
-        {candidate?.kind === 'device' && conversationVoice !== voice && (
+        {candidate?.kind === 'embedded' && conversationVoice !== voice && (
           <Pressable accessibilityRole="button" disabled={busy} onPress={() => void selectForConversation()} style={[styles.stopButton, busy && styles.disabled]}>
             <Text style={styles.primaryText}>Использовать в разговоре</Text>
           </Pressable>
         )}
 
+        {logRecords !== null && (
+          <Text style={styles.note}>Журнал замеров: {logRecords} записей</Text>
+        )}
         <Text style={styles.heading}>Тестовые реплики</Text>
-        <Text style={styles.note}>Слово в *звёздочках* Silero выделяет логическим ударением (правило RuVoice «Логическое ударение»). Системному TTS звёздочки не передаются.</Text>
         {samples.map(({ label, text }) => (
           <View key={label} style={styles.sampleRow}>
             <View style={styles.sampleCopy}>
@@ -337,25 +363,11 @@ export function VoiceLabScreen() {
             <Text style={styles.sampleText}>{metrics.phrase}</Text>
             <Text style={styles.metric}>Задержка до начала звука: {metrics.firstFrameMs === undefined ? '—' : `${metrics.firstFrameMs} мс`}</Text>
             {metrics.synthMs !== undefined && (
-              <Text style={styles.metric}>Синтез: {metrics.synthMs} мс на {metrics.audioMs} мс звука ({metrics.audioMs ? (metrics.synthMs / metrics.audioMs).toFixed(2) : '—'} от реального времени)</Text>
+              <Text style={styles.metric}>Синтез: {metrics.totalSynthMs ?? metrics.synthMs} мс на {metrics.totalAudioMs ?? metrics.audioMs} мс звука</Text>
             )}
             {metrics.accented ? <Text style={styles.note}>Ударения: {metrics.accented}</Text> : null}
-            <Text style={styles.metric}>Память процесса iMeet (PSS): {metrics.appPssKb === undefined ? '—' : `${Math.round(metrics.appPssKb / 1024)} МиБ`}</Text>
+            <Text style={styles.metric}>Память iMeet: {metrics.appPssKb === undefined ? '—' : `${Math.round(metrics.appPssKb / 1024)} МиБ`}</Text>
             <Text style={styles.note}>{metrics.state === 'error' ? `Воспроизведение не удалось: ${metrics.error ?? 'неизвестная ошибка'}` : metrics.state === 'preparing' ? 'Подготавливаем звук…' : metrics.state === 'playing' ? 'Идёт озвучка…' : metrics.state === 'stopped' ? 'Остановлено.' : 'Готово.'}</Text>
-            <Text style={styles.note}>{findVoice(metrics.voice)?.kind === 'embedded'
-              ? 'Встроенный голос синтезирует фразу целиком внутри iMeet: задержка включает весь синтез, а память моделей входит в PSS iMeet.'
-              : 'Время до начала измерено по событию onStart Android TTS: движок синтезирует фразу целиком, поэтому оно включает весь синтез. RuVoice работает в своём процессе, его память в PSS iMeet не входит.'}</Text>
-          </View>
-        )}
-
-        {history.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.heading}>Последние запуски</Text>
-            {history.map((run, index) => (
-              <Text key={`${index}-${run.voice}-${run.phrase}`} style={styles.note}>
-                {voiceLabel(run.voice)} · {run.phrase}: до звука {run.firstFrameMs === undefined ? '—' : `${run.firstFrameMs} мс`}
-              </Text>
-            ))}
           </View>
         )}
 

@@ -83,7 +83,7 @@ function ShaderWave({ active = true, height, left, level = 0, status, top, width
     dim.value = withTiming(motion.dim, stateEase);
   }, [dim, energy, motion, speak, speed, think]);
 
-  // Пока агент говорит — снимаем звук с выхода (его голос играет RuVoice в своём процессе).
+  // Пока агент говорит — снимаем звук с выхода (голос агента).
   const agentSpeaking = status === 'speaking' && active;
   useEffect(() => {
     if (!agentSpeaking) return;

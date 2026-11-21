@@ -5,13 +5,14 @@ import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ConversationButton } from '@/components/ai-conversation/ConversationButton';
 import { backchannelMaxSec, type ConversationSettings, settingLimits } from '@/core/settings/conversationSettings';
-import { hasDeviceTts, newDeviceRequestId, playDeviceVoice, stopDeviceVoice } from '@/core/voice/deviceTts';
-import { installHint, voiceCatalog, type DeviceVoice } from '@/core/voice/voiceCatalog';
+import { embeddedDefaults, hasEmbeddedSilero, playEmbeddedSilero, stopEmbeddedSilero } from '@/core/voice/sileroEmbedded';
+import { voiceCatalog, type EmbeddedVoice } from '@/core/voice/voiceCatalog';
 import { colors, typography } from '@/theme/tokens';
 
 const sample = 'Привет! Я помогу тебе найти *интересных* людей. Расскажешь немного о себе?';
-const voices = voiceCatalog.filter((voice): voice is DeviceVoice => voice.kind === 'device' && voice.pack === 'ru');
-const voiceName = (voice: DeviceVoice) => voice.label.replace('Silero v5_5_ru · ', '');
+// Встроенные голоса Silero: работают сразу после установки, без отдельных приложений.
+const voices = voiceCatalog.filter((voice): voice is EmbeddedVoice => voice.kind === 'embedded');
+const voiceName = (voice: EmbeddedVoice) => voice.speaker;
 
 interface ProfileVoiceSettingsProps {
   available: boolean | null;
@@ -80,7 +81,7 @@ export function ProfileVoiceSettings({
   const [error, setError] = useState('');
   const selected = voices.find(({ id }) => id === selectedId) ?? voices[0];
 
-  useEffect(() => () => { void stopDeviceVoice(); }, []);
+  useEffect(() => () => { void stopEmbeddedSilero(); }, []);
 
   const select = async (id: string) => {
     if (playing) return;
@@ -94,13 +95,13 @@ export function ProfileVoiceSettings({
 
   const listen = async () => {
     if (playing) {
-      await stopDeviceVoice();
+      await stopEmbeddedSilero();
       return;
     }
     setError('');
     setPlaying(true);
     try {
-      await playDeviceVoice(selected.engine, selected.query, sample, newDeviceRequestId(), () => {});
+      await playEmbeddedSilero(sample, selected.speaker, embeddedDefaults);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Не удалось воспроизвести голос.');
     } finally {
@@ -142,10 +143,10 @@ export function ProfileVoiceSettings({
       </View>
       <Text style={styles.note}>
         {available === false
-          ? `${installHint(selected)} Пока ответы звучат системным голосом.`
-          : 'Silero v5_5_ru через RuVoice, без интернета.'}
+          ? 'Голос ещё скачивается или не скачался — пока ответы звучат системным голосом.'
+          : 'Silero v5_5_ru прямо в iMeet, без интернета.'}
       </Text>
-      {hasDeviceTts && (
+      {hasEmbeddedSilero && (
         <ConversationButton
           disabled={available === false}
           label={playing ? 'Остановить' : 'Прослушать'}

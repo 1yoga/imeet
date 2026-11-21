@@ -17,17 +17,24 @@ import {
   normalizeSettings,
   saveConversationSettings,
 } from '@/core/settings/conversationSettings';
-import { createDeviceTtsEngine, hasDeviceTts, inspectDeviceVoice } from '@/core/voice/deviceTts';
+import {
+  createEmbeddedTtsEngine,
+  downloadEmbeddedSilero,
+  embeddedSileroStatus,
+  hasEmbeddedSilero,
+  loadEmbeddedSilero,
+} from '@/core/voice/sileroEmbedded';
+import { logVoiceMetric } from '@/core/voice/voiceMetrics';
 import { stripFocusMarks } from '@/core/voice/focusMarks';
 import {
   defaultConversationVoiceId,
-  findDeviceVoice,
   findVoice,
   loadConversationVoiceId,
   saveConversationVoiceId,
 } from '@/core/voice/voiceCatalog';
 
 import { mockConversationService } from './mockConversationService';
+import { mockLlmTiming, streamMockReply, type LlmStreamStats } from './mockLlm';
 import type { ConversationStatus } from './types';
 
 const speech = Platform.OS === 'android' ? createSpeechEngine({ allowStub: false }) : null;
@@ -119,6 +126,15 @@ function cancelConversation(session: Conversation) {
   }
 }
 
+/** Замеры распознавания из Наслуха (0.3.0+). */
+interface AsrTimings {
+  finalizeMs?: number;
+  tailDecodeMs?: number;
+  totalDecodeMs?: number;
+  segments?: number;
+  endSilenceMs?: number;
+}
+
 /** Замеры для отладочной строки состояния: распознавание и время до первого звука ответа. */
 export interface Timings {
   recognitionMs?: number;
@@ -157,27 +173,20 @@ interface PreparedTts {
 }
 
 /**
- * Голос ответа: выбранный в профиле Silero через RuVoice, иначе системный TTS.
- * Проверка голоса может разово не пройти (RuVoice занят другой озвучкой), поэтому вторая попытка;
- * кешированный результат прежней проверки не используется — каждый раз проверяем заново.
+ * Голос ответа: встроенный Silero, выбранный в профиле; если моделей нет в сборке — системный TTS.
  */
 async function prepareTts(voiceId: string): Promise<PreparedTts> {
   const chosen = findVoice(voiceId);
-  if (hasDeviceTts && chosen?.kind !== 'system') {
-    const voice = findDeviceVoice(voiceId);
-    const engine = createDeviceTtsEngine(voice.engine, voice.query);
-    for (let attempt = 0; attempt < 2; attempt++) {
-      try {
-        await engine.initialize();
-        return { engine, voiceId, fallback: false };
-      } catch {
-        await new Promise((resolve) => setTimeout(resolve, 400));
-      }
-    }
+  if (chosen?.kind === 'embedded' && hasEmbeddedSilero) {
+    const engine = createEmbeddedTtsEngine(chosen.speaker);
+    try {
+      await engine.initialize();
+      return { engine, voiceId, fallback: false };
+    } catch { /* моделей нет в сборке — ниже системный голос */ }
   }
   const system = await loadAndroidTts();
   await system?.initialize();
-  return { engine: system, voiceId, fallback: hasDeviceTts && chosen?.kind !== 'system' };
+  return { engine: system, voiceId, fallback: chosen?.kind !== 'system' };
 }
 
 /** Откуда берутся ответы агента: общий разговор или, например, вопросы о кандидате. */
@@ -193,16 +202,14 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   const current = useRef<Conversation | null>(null);
   const replies = useRef<ReplySession | null>(null);
   replies.current ??= options.createReplies?.() ?? mockConversationService.createSession();
-  const [model, setModel] = useState<ModelState>(() => modelReady
-    ? { phase: 'ready' }
-    : { phase: 'loading', message: 'Проверяем модель речи…' });
+  const [model, setModel] = useState<ModelState>({ phase: 'loading', message: 'Проверяем модели…' });
   const [modelRetry, setModelRetry] = useState(0);
   const [isActive, setActive] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>({ phase: 'idle' });
   const [transcript, setTranscript] = useState('');
   const [reply, setReply] = useState('');
   const [sileroVoiceId, setSileroVoiceId] = useState(defaultConversationVoiceId);
-  const [sileroAvailable, setSileroAvailable] = useState<boolean | null>(hasDeviceTts ? null : false);
+  const [sileroAvailable, setSileroAvailable] = useState<boolean | null>(hasEmbeddedSilero ? null : false);
   // Голос читается в момент озвучки (а не в начале сеанса), чтобы смена в профиле действовала сразу.
   const voiceIdRef = useRef(defaultConversationVoiceId);
   const [voiceNotice, setVoiceNotice] = useState('');
@@ -216,15 +223,11 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   const settingsRef = useRef(defaultConversationSettings);
   const textPlayback = useRef<TtsPlaybackHandle | null>(null);
 
+
   useEffect(() => {
     if (!speech) return;
-    if (modelReady) {
-      setModel({ phase: 'ready' });
-      return;
-    }
-
     let observing = true;
-    setModel({ phase: 'loading', message: 'Проверяем модель речи…' });
+    if (!modelReady) setModel({ phase: 'loading', message: 'Проверяем модель речи…' });
     const unsubscribe = addNaslukhProgressListener(({ phase, message, progress }) => {
       if (observing && phase === 'download') {
         setModel({
@@ -241,7 +244,24 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       unsubscribe();
     };
 
-    void prepareModel().then(() => {
+    void prepareModel().then(async () => {
+      if (!observing) return;
+      // Голос агента: модели (~130 МБ) скачиваются один раз, потом сразу грузятся в память,
+      // чтобы первый ответ не ждал загрузки (~2 с).
+      if (hasEmbeddedSilero) {
+        try {
+          const status = await embeddedSileroStatus();
+          if (!status.bundled) {
+            if (observing) setModel({ phase: 'loading', message: 'Загружаем голос (~130 МБ)…', progress: 0 });
+            await downloadEmbeddedSilero((progress, message) => {
+              if (observing) setModel({ phase: 'loading', message, progress });
+            });
+          }
+          void loadEmbeddedSilero().catch(() => {});
+        } catch {
+          // Голос не скачался — агент ответит системным голосом, разговор всё равно доступен.
+        }
+      }
       if (!observing) return;
       stopObserving();
       setModel({ phase: 'ready' });
@@ -253,7 +273,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         phase: 'error',
         message: missingModule
           ? 'Установите Android-сборку iMeet с модулем распознавания речи.'
-          : 'Не удалось подготовить модель. Проверьте интернет и свободное место.',
+          : 'Не удалось подготовить модели. Проверьте интернет и свободное место.',
       });
     });
 
@@ -277,13 +297,15 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   }, []));
 
   useEffect(() => {
-    if (!hasDeviceTts) return;
     let observing = true;
-    const voice = findDeviceVoice(sileroVoiceId);
-    setSileroAvailable(null);
-    void inspectDeviceVoice(voice.engine, voice.query)
-      .then((result) => { if (observing) setSileroAvailable(result.available); })
-      .catch(() => { if (observing) setSileroAvailable(false); });
+    if (findVoice(sileroVoiceId)?.kind === 'embedded') {
+      setSileroAvailable(null);
+      void embeddedSileroStatus()
+        .then((status) => { if (observing) setSileroAvailable(status.bundled); })
+        .catch(() => { if (observing) setSileroAvailable(false); });
+      return () => { observing = false; };
+    }
+    setSileroAvailable(false);
     return () => { observing = false; };
   }, [sileroVoiceId]);
 
@@ -419,8 +441,10 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         if (continueFromMonitor) update('user-speaking');
 
         let text = '';
+        // С @naslukh/speech-rn 0.3.0: реплика расшифровывается по ходу речи, в результате — замеры.
+        let asrTimings: AsrTimings | undefined;
         try {
-          text = (await speech.listenOnce({
+          const heard = await speech.listenOnce({
             language: 'ru',
             vadThreshold: 0.5,
             vadMinSilenceSec: settingsRef.current.endOfPhraseSec,
@@ -428,7 +452,9 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
             // Эхоподавление нужно, когда во время записи может звучать сам телефон.
             echoCancellation: backchannelOn || Boolean(continueFromMonitor),
             ...(continueFromMonitor ? { continueFromMonitor } : {}),
-          })).text.trim();
+          });
+          text = heard.text.trim();
+          asrTimings = (heard as { timings?: AsrTimings }).timings;
         } catch (error) {
           // Экран слушает постоянно: тишина — не ошибка, просто слушаем дальше.
           if (!isSilence(error)) throw error;
@@ -496,22 +522,58 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
             monitor = null; // старая нативная сборка или микрофон занят — отвечаем без перебивания
           }
         }
+        const llm: LlmStreamStats = { startedAt: Date.now() };
+        let audioAt = 0;
+        const onStart = () => {
+          audioAt = Date.now();
+          if (session.cancelled) return;
+          setFeedback({ phase: 'speaking' });
+          setTimings((value) => ({ ...value, replyMs: audioAt - recognizedAt }));
+        };
         try {
           // Naslukh releases AudioRecord before listenOnce settles.
-          const playback = await tts.speak({
-            // Разметку логического ударения понимает только Silero в RuVoice.
-            text: tts.id.startsWith('device:') ? answer : stripFocusMarks(answer),
-            locale: 'ru-RU',
-            onStart: () => {
-              if (session.cancelled) return;
-              setFeedback({ phase: 'speaking' });
-              setTimings((value) => ({ ...value, replyMs: Date.now() - recognizedAt }));
-            },
-          });
+          // Встроенный голос получает ответ потоком (как от LLM на бэкенде) и говорит с первой фразы.
+          const playback = tts.speakStream
+            ? tts.speakStream({ chunks: streamMockReply(answer, llm, () => session.cancelled || interrupted), onStart })
+            : await tts.speak({
+              // Разметку логического ударения (*слово*) понимает только встроенный Silero.
+              text: tts.id.startsWith('embedded:') ? answer : stripFocusMarks(answer),
+              locale: 'ru-RU',
+              onStart,
+            });
           session.playback = playback;
           if (session.cancelled || mutedRef.current || interrupted) stopPlayback(session);
 
           const result = await playback.finished;
+          // Замер всего круга: конец речи → распознавание → «LLM» → первый звук ответа.
+          const endOfPhraseMs = Math.round(settingsRef.current.endOfPhraseSec * 1000);
+          const asrMs = recognizingAt ? recognizedAt - recognizingAt : undefined;
+          const replyMs = audioAt ? audioAt - recognizedAt : undefined;
+          void logVoiceMetric('conversation_turn', {
+            state: result,
+            interrupted,
+            voice: prepared?.voiceId,
+            engine: tts.id,
+            streaming: Boolean(tts.speakStream),
+            heard: text,
+            answer,
+            answerChars: answer.length,
+            endOfPhraseMs,
+            asrMs,
+            // Наслух: от решения «реплика кончилась» до текста; сколько кусков расшифровано по ходу речи.
+            asrFinalizeMs: asrTimings?.finalizeMs,
+            asrSegments: asrTimings?.segments,
+            asrTailDecodeMs: asrTimings?.tailDecodeMs,
+            asrTotalDecodeMs: asrTimings?.totalDecodeMs,
+            replyDelayMs: delayMs,
+            llmFirstTokenMs: llm.firstTokenAt ? llm.firstTokenAt - llm.startedAt : undefined,
+            llmTotalMs: llm.lastTokenAt ? llm.lastTokenAt - llm.startedAt : undefined,
+            mockLlm: tts.speakStream ? mockLlmTiming : undefined,
+            firstAudioAfterLlmTokenMs: audioAt && llm.firstTokenAt ? audioAt - llm.firstTokenAt : undefined,
+            replyMs,
+            // Сколько человек ждёт после того, как замолчал: тишина до конца фразы + распознавание + ответ.
+            perceivedMs: replyMs !== undefined && asrMs !== undefined ? endOfPhraseMs + asrMs + replyMs : undefined,
+          });
           if (!session.cancelled && !mutedRef.current && !interrupted && result === 'stopped') {
             throw new Error('TTS playback was interrupted');
           }
@@ -533,7 +595,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
     } catch {
       const messages = {
         permission: 'Не удалось получить доступ к микрофону.',
-        tts: 'Не удалось озвучить ответ. Проверьте RuVoice или русский голос Android.',
+        tts: 'Не удалось озвучить ответ. Проверьте голос в профиле.',
         recognition: 'Не удалось распознать речь. Проверьте доступ к микрофону.',
       };
       next = { phase: 'error', message: messages[stage] };
@@ -592,7 +654,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       const tts = ready.engine;
       if (!tts || mutedRef.current) return;
       const playback = await tts.speak({
-        text: tts.id.startsWith('device:') ? answer : stripFocusMarks(answer),
+        text: tts.id.startsWith('embedded:') ? answer : stripFocusMarks(answer),
         locale: 'ru-RU',
         onStart: () => {
           setFeedback({ phase: 'speaking' });
@@ -603,7 +665,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       await playback.finished;
     } catch {
       failed = true;
-      setFeedback({ phase: 'error', message: 'Не удалось озвучить ответ. Проверьте RuVoice или русский голос Android.' });
+      setFeedback({ phase: 'error', message: 'Не удалось озвучить ответ. Проверьте голос в профиле.' });
     } finally {
       textPlayback.current = null;
       setTextBusy(false);
@@ -638,7 +700,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       return;
     }
     const voice = findVoice(ready.voiceId);
-    setVoiceNotice(`Голос «${voice?.label ?? ready.voiceId}» не запустился в RuVoice — отвечаю системным голосом.`);
+    setVoiceNotice(`Голос «${voice?.label ?? ready.voiceId}» не запустился — отвечаю системным голосом.`);
   }
 
   const updateSettings = async (changes: Partial<ConversationSettings>) => {
@@ -658,7 +720,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
 
   return {
     supported: speech !== null,
-    hasTts: hasDeviceTts || hasAndroidTts,
+    hasTts: hasEmbeddedSilero || hasAndroidTts,
     model,
     retryModel,
     isActive,

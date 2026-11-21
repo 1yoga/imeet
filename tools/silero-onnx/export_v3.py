@@ -40,6 +40,8 @@ TEXTS = [
     "Привет! Я помогу тебе найти интересных людей. Расскажешь немного о себе?",
     "Понятно. А чем ты любишь заниматься по выходным, если не секрет?",
     "Валерия любит *грузинскую* кухню и сама неплохо готовит хинкали.",
+    "Мы увидели старинный замок на холме, а на двери висел тяжёлый замок.",
+    "Все мои друзья любят этот город, а я пока нет.",
 ]
 report: dict = {"steps": {}}
 
@@ -651,6 +653,15 @@ def accent_np(sentence: str) -> str:
             continue
         if cw in exc:
             s_pos, y_pos = exc[cw]
+            if have_stress:      # ударение уже поставил решатель омографов: «ё» только если совпадает с ним
+                marks = [k for k, ch in enumerate(raw) if ch == "+"]
+                word = raw.replace("+", "")
+                if y_pos != -1 and (y_pos + 1) in marks:
+                    word = word[:y_pos] + ("ё" if word[y_pos].islower() else "Ё") + word[y_pos + 1:]
+                for m in marks:
+                    word = word[:m] + "+" + word[m:]
+                out.append(word)
+                continue
             if y_pos != -1:
                 raw = raw[:y_pos] + ("ё" if raw[y_pos].islower() else "Ё") + raw[y_pos + 1:]
             out.append(raw[:s_pos] + "+" + raw[s_pos:])
@@ -659,9 +670,12 @@ def accent_np(sentence: str) -> str:
         set_stress = sp[i][s_idx] > 0.5 and not have_stress
         y_idx = int(yp[i].argmax())
         set_yo = yp[i][y_idx] > 0.5
+        stressed_ids = [s_idx]
+        if have_stress:
+            stressed_ids = [sum(part.count(v) for v in VOWELS) for part in low.split("+")]
         vowel_ids = [k for k, ch in enumerate(low) if ch in VOWELS]
         ye_ids = [k for k, ch in enumerate(low) if ch == "е"]
-        stress_pos = [vowel_ids[s_idx]] if s_idx < len(vowel_ids) else []
+        stress_pos = [vowel_ids[k] for k in stressed_ids if k < len(vowel_ids)]
         yo_pos = [ye_ids[y_idx - 1]] if 0 < y_idx and y_idx - 1 < len(ye_ids) else []
         if not vowel_ids:
             out.append(raw)
@@ -677,6 +691,192 @@ def accent_np(sentence: str) -> str:
                 raw = raw[:s + k] + "+" + raw[s + k:]
         out.append(raw)
     return "".join(out)
+
+
+# ---------------------------------------------------------------- 6b. Омографы (замо́к / за́мок): маленький BERT
+class Bert(nn.Module):
+    """BertModelJIT без маски внимания (как в оригинале: attention_mask = None, паддинг тоже участвует)."""
+
+    def __init__(self, b, vocab_size):
+        super().__init__()
+        e = b.embeddings
+        try:
+            self.word = leaf(e.word_embeddings)
+        except Exception:                       # квантованная таблица: достаём значения прогоном
+            with torch.no_grad():
+                table = e.word_embeddings(torch.arange(vocab_size)).float()
+            self.word = nn.Embedding.from_pretrained(table, freeze=True)
+        self.pos = leaf(e.position_embeddings)
+        self.tok = leaf(e.token_type_embeddings)
+        self.norm = leaf(e.LayerNorm)
+        layers = kids(b.encoder.layer)
+        self.q = nn.ModuleList([leaf(l.attention.self.query) for l in layers])
+        self.k = nn.ModuleList([leaf(l.attention.self.key) for l in layers])
+        self.v = nn.ModuleList([leaf(l.attention.self.value) for l in layers])
+        self.o = nn.ModuleList([leaf(l.attention.output.dense) for l in layers])
+        self.n1 = nn.ModuleList([leaf(l.attention.output.LayerNorm) for l in layers])
+        self.i = nn.ModuleList([leaf(l.intermediate.dense) for l in layers])
+        self.out = nn.ModuleList([leaf(l.output.dense) for l in layers])
+        self.n2 = nn.ModuleList([leaf(l.output.LayerNorm) for l in layers])
+        self.h = int(layers[0].attention.self.num_attention_heads)
+        self.d = int(layers[0].attention.self.attention_head_size)
+
+    def heads(self, x):              # [N, L, H*D] -> [N, H, L, D] без «зашитых» размеров
+        return x.unflatten(-1, (self.h, self.d)).transpose(1, 2)
+
+    def forward(self, ids):
+        pos = torch.cumsum(torch.ones_like(ids), 1) - 1
+        x = self.norm(self.word(ids) + self.tok(torch.zeros_like(ids)) + self.pos(pos))
+        for l in range(len(self.q)):
+            q, k, v = self.heads(self.q[l](x)), self.heads(self.k[l](x)), self.heads(self.v[l](x))
+            att = torch.softmax(torch.matmul(q, k.transpose(-1, -2)) / (self.d ** 0.5), dim=-1)
+            ctx = torch.matmul(att, v).transpose(1, 2).flatten(2)
+            x = self.n1[l](self.o[l](ctx) + x)
+            x = self.n2[l](self.out[l](torch.nn.functional.gelu(self.i[l](x))) + x)
+        return x
+
+
+class Homo(nn.Module):
+    """HomoSolverClean: вектор метки [HOMO] + среднее по словам омографа -> классификатор."""
+
+    def __init__(self, m, vocab_size):
+        super().__init__()
+        self.bert = Bert(m.bert, vocab_size)
+        self.clf = nn.Sequential(*[leaf(c) for c in kids(m.homo_clf)])
+
+    def forward(self, ids, starts, ends):
+        hidden = self.bert(ids)
+        hsize = hidden.size(2)
+        marker = hidden.gather(1, starts.view(-1, 1, 1).expand(-1, 1, hsize)).squeeze(1)
+        pos = torch.cumsum(torch.ones_like(ids), 1) - 1
+        mask = ((pos > starts.view(-1, 1)) & (pos < ends.view(-1, 1))).to(hidden.dtype).unsqueeze(-1)
+        word = (hidden * mask).sum(1) / mask.sum(1)
+        return self.clf(torch.cat([marker, word], dim=1))
+
+
+homo_tok = None
+if homo is not None:
+    try:
+        tk = homo.tokenizer
+        vocab = {tok: int(i) for tok, i in tk.vocab.items()}
+        homo_tok = {
+            "vocab": vocab, "never_split": sorted(tk.never_split),
+            "cls": tk.cls_token_id, "sep": tk.sep_token_id, "pad": tk.pad_token_id, "unk": tk.unk_token_id,
+            "homo_start": tk.homo_start_id, "homo_end": tk.homo_end_id,
+        }
+        (APP / "homo_tokenizer.json").write_text(json.dumps(homo_tok, ensure_ascii=False, indent=1), encoding="utf-8")
+        (APP / "homodict.json").write_text(json.dumps(homo.homodict, ensure_ascii=False), encoding="utf-8")
+        log("homosolver: vocab", len(vocab), "| homographs", len(homo.homodict), "| never_split", homo_tok["never_split"][:6],
+            "| [HOMO] id", tk.homo_start_id)
+        homo_m = Homo(homo.model, max(vocab.values()) + 1)
+        probe = [torch.tensor(tk(s)) for s in ["мы увидели старинный  [HOMO] замок [/HOMO]  на холме",
+                                                 "на двери висел  [HOMO] замок [/HOMO] , а мы ушли домой"]]
+        ids_p = torch.nn.utils.rnn.pad_sequence(probe, batch_first=True, padding_value=tk.pad_token_id)
+        st_p = torch.LongTensor([int(torch.where(p == tk.homo_start_id)[0][0]) for p in probe])
+        en_p = torch.LongTensor([int(torch.where(p == tk.homo_end_id)[0][0]) for p in probe])
+        if check("homo", homo_m(ids_p, st_p, en_p), homo.model(ids_p, st_p, en_p), tol=1e-3):
+            single = ids_p[:1, : len(probe[0])]
+            export("homo", homo_m, (ids_p, st_p, en_p), ["ids", "starts", "ends"], ["logits"],
+                   {"ids": {0: "N", 1: "L"}, "starts": {0: "N"}, "ends": {0: "N"}, "logits": {0: "N"}},
+                   more=[(single, st_p[:1], en_p[:1])])
+    except Exception as e:
+        step("export homo", False, error=str(e).splitlines()[0][:300])
+        (OUT / "homo.export-error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+
+HOMO_RE = re.compile(r"(?=.*[а-яё])[а-яё+]+", re.IGNORECASE)
+
+
+def bert_tokens(text: str):
+    """SimpleBertTokenizer: чистка, разбиение по пробелам и знакам препинания, WordPiece."""
+    import unicodedata
+    never = set(homo_tok["never_split"])
+    vocab = homo_tok["vocab"]
+    clean = []
+    for ch in text:
+        cp = ord(ch)
+        if cp == 0 or cp == 0xFFFD or (ch not in "\t\n\r" and unicodedata.category(ch).startswith("C")):
+            continue
+        clean.append(" " if ch in " \t\n\r" or unicodedata.category(ch) == "Zs" else ch)
+    words = []
+    for tok in "".join(clean).strip().split():
+        if tok in never:
+            words.append(tok)
+            continue
+        cur = []
+        for ch in tok:
+            cp = ord(ch)
+            punct = 33 <= cp <= 47 or 58 <= cp <= 64 or 91 <= cp <= 96 or 123 <= cp <= 126 or unicodedata.category(ch).startswith("P")
+            if punct:
+                if cur:
+                    words.append("".join(cur))
+                    cur = []
+                words.append(ch)
+            else:
+                cur.append(ch)
+        if cur:
+            words.append("".join(cur))
+    ids = [homo_tok["cls"]]
+    for w in words:
+        if len(w) > 100:
+            ids.append(homo_tok["unk"])
+            continue
+        start, sub = 0, []
+        while start < len(w):
+            end, found = len(w), None
+            while start < end:
+                piece = ("##" if start > 0 else "") + w[start:end]
+                if piece in vocab:
+                    found = piece
+                    break
+                end -= 1
+            if found is None:
+                sub = None
+                break
+            sub.append(vocab[found])
+            start = end
+        ids += sub if sub is not None else [homo_tok["unk"]]
+    return ids + [homo_tok["sep"]]
+
+
+def homo_np(sentence: str) -> str:
+    """Порт HomoSolver.__call__ (put_stress=True, put_yo=True, stress_single_vowel=True)."""
+    if homo_tok is None or "homo" not in sessions:
+        return sentence
+    hd = homo.homodict
+    found = []
+    for m in HOMO_RE.finditer(sentence):
+        word = m.group()
+        if word.lower() in hd:
+            mark = sentence[:m.start()] + " [HOMO] " + word + " [/HOMO] " + sentence[m.end():]
+            found.append((m.start(), m.end(), word, bert_tokens(mark)))
+    if not found:
+        return sentence
+    L = max(len(f[3]) for f in found)
+    ids = np.full((len(found), L), homo_tok["pad"], dtype=np.int64)
+    for i, f in enumerate(found):
+        ids[i, : len(f[3])] = f[3]
+    starts = np.array([f[3].index(homo_tok["homo_start"]) for f in found], dtype=np.int64)
+    ends = np.array([f[3].index(homo_tok["homo_end"]) for f in found], dtype=np.int64)
+    logits = sessions["homo"].run(None, {"ids": ids, "starts": starts, "ends": ends})[0].reshape(len(found))
+    preds = np.round(1 / (1 + np.exp(-logits))).astype(int)
+    out, offset = sentence, 0
+    for (start, end, word, _), pred in zip(found, preds):
+        start, end = start + offset, end + offset
+        variant = sorted(hd[word.lower()])[pred]
+        n_vowels = sum(c.lower() in VOWELS for c in variant)
+        stress_idx = variant.index("+")
+        variant = variant.replace("+", "")
+        variant = "".join(c2.lower() if c1.islower() else c2.upper() for c1, c2 in zip(word, variant))
+        if n_vowels > 1 or True:
+            variant = variant[:stress_idx] + "+" + variant[stress_idx:]
+            offset += 1
+        out = out[:start] + variant + out[end:]
+    return out
+
+
+def stress_np(sentence: str) -> str:
+    """SileroStress: сначала омографы, потом n-граммный акцентор."""
+    return accent_np(homo_np(sentence))
 
 
 # ---------------------------------------------------------------- 7. Синтез целиком из ONNX
@@ -709,14 +909,14 @@ def synth_onnx(text: str):
     t0 = time.time()
     plain = text.replace("*", "")
     sentence = prepare_text(plain)
-    accented = accent_np(sentence)
+    accented = stress_np(sentence)
     seq = text_to_ids(accented)[None, :]
     spk = np.array(speaker_ids, dtype=np.int64)
     T = seq.shape[1]
     log_dur = sessions["dur"].run(None, {"seq": seq, "spk": spk})[0]
     dur = post_durations(log_dur)
     tids = type_ids_for(plain, T)
-    fm = focus_for(accent_np(prepare_text(plain)), text, T)
+    fm = focus_for(accented, text, T)
     pname = "pitch_focus" if fm is not None else "pitch"
     pitch = sessions[pname].run(None, feeds(sessions[pname], ["seq", "spk", "type_ids", "focus"],
                                             [seq, spk, tids, fm if fm is not None else np.zeros((1, T), np.int64)]))[0]
@@ -734,21 +934,17 @@ def synth_onnx(text: str):
 
 
 # ---------------------------------------------------------------- 8. Проверка
-if all(k in sessions for k in ("dur", "pitch", "pitch_focus", "encoder", "dec_pre", "dec_mid", "dec_post", "vocoder", "accent_heads")):
+if all(k in sessions for k in ("dur", "pitch", "pitch_focus", "encoder", "dec_pre", "dec_mid", "dec_post", "vocoder", "accent_heads", "homo")):
     for i, text in enumerate(TEXTS, 1):
         try:
             plain = text.replace("*", "")
-            # Оригинал без омографов (их BERT пока не переносим) — честное сравнение.
             t0 = time.time()
-            ref = model.apply_tts(text=text, speaker=SPEAKER, sample_rate=SR, put_accent=True, put_yo=True,
-                                  put_stress_homo=False, put_yo_homo=False)
+            ref = model.apply_tts(text=text, speaker=SPEAKER, sample_rate=SR)      # полный оригинал, с омографами
             ref_sec = time.time() - t0
-            ref_full = model.apply_tts(text=text, speaker=SPEAKER, sample_rate=SR)
-            save_wav(OUT / f"{i}-original.wav", ref_full)
-            save_wav(OUT / f"{i}-original-no-homographs.wav", ref)
+            save_wav(OUT / f"{i}-original.wav", ref)
 
-            orig_acc = ngram_acc(prepare_text(plain), put_stress=True, put_yo=True, stress_single_vowel=True)
-            my_acc = accent_np(prepare_text(plain))
+            orig_acc = pack.accentor(prepare_text(plain))
+            my_acc = stress_np(prepare_text(plain))
             step(f"phrase {i}: accents", orig_acc == my_acc, original=orig_acc, ours=my_acc)
 
             audio, info = synth_onnx(text)
@@ -762,6 +958,43 @@ if all(k in sessions for k in ("dur", "pitch", "pitch_focus", "encoder", "dec_pr
 else:
     step("full synthesis", False, error="не все части экспортировались")
 
+# ---------------------------------------------------------------- 8b. Сжатие модели омографов (117 МБ -> ~30 МБ, int8)
+HOMO_CHECK = TEXTS + [
+    "Старинный замок стоял на холме.", "Ключ не подходил к замку на двери.", "Все пришли вовремя.", "Я знаю всё.",
+    "Мука для блинов закончилась.", "Это была настоящая мука.", "Он плачет, а она смеётся.", "Плачу за кофе я.",
+    "Белки едят орехи.", "В яйце много белка.", "Атлас мира лежал на столе.", "Платье из атласа блестело.",
+    "Ирис цвёл у дома.", "Я купил ирис в магазине.", "Он вошёл в дом и сел.", "Духи пахли розой.",
+    "Мы долго стояли у берега.", "Она стоит на стоянке.", "Покажи мне свой орган.", "В церкви играл орган.",
+]
+if "homo" in sessions:
+    try:
+        from onnxruntime.quantization import QuantType, quantize_dynamic
+        fp32 = OUT / "homo_fp32.onnx"
+        q = APP / "homo_int8.onnx"
+        import shutil
+        shutil.copyfile(APP / "homo.onnx", fp32)
+        quantize_dynamic(str(fp32), str(q), weight_type=QuantType.QInt8)
+        full = sessions["homo"]
+        sessions["homo"] = ort.InferenceSession(str(q), providers=["CPUExecutionProvider"])
+        bad = []
+        for t in HOMO_CHECK:
+            p = prepare_text(t)
+            want = pack.accentor(p)
+            got = stress_np(p)
+            if got != want:
+                bad.append({"text": t, "original": want, "int8": got})
+        ok_q = not bad
+        step("homo int8", ok_q, mb=round(q.stat().st_size / 1e6, 1), checked=len(HOMO_CHECK), mismatches=bad[:3])
+        if ok_q:
+            (APP / "homo.onnx").unlink()
+            q.rename(APP / "homo.onnx")
+        else:
+            q.unlink()
+            sessions["homo"] = full
+    except Exception as e:
+        step("homo int8", False, error=str(e).splitlines()[0][:300])
+        (OUT / "homo-int8.error.txt").write_text(traceback.format_exc(), encoding="utf-8")
+
 # ---------------------------------------------------------------- 9. Отчёт
 (OUT / "report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
 lines = ["# Silero -> ONNX v3", "", "| Шаг | Итог | Детали |", "| --- | --- | --- |"]
@@ -770,7 +1003,7 @@ for k, v in report["steps"].items():
     lines.append(f"| {k} | {'да' if v['ok'] else 'НЕТ'} | {json.dumps(d, ensure_ascii=False)[:160]} |")
 total = sum(f.stat().st_size for f in APP.iterdir()) / 1e6
 lines += ["", f"Файлы для приложения: app-assets ({total:.0f} МБ).",
-          "Послушать: N-original.wav, N-original-no-homographs.wav, N-onnx.wav."]
+          "Послушать: N-original.wav (оригинал) и N-onnx.wav (наш)."]
 (OUT / "report.md").write_text("\n".join(lines), encoding="utf-8")
 log("\n".join(lines))
 log("DONE")

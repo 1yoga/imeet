@@ -2,7 +2,7 @@
 rem iMeet: published Naslukh + wave engine + APK on the phone + git commit. Re-runnable: done steps are skipped.
 setlocal
 cd /d "%~dp0.."
-set "VER=0.2.0"
+set "VER=0.3.0"
 set "LOG=%CD%\artifacts\ship-log.txt"
 echo ship v5 > "%LOG%"
 
@@ -38,17 +38,9 @@ echo === typecheck (log: artifacts\typecheck-log.txt) ===
 call npx tsc --noEmit > "%CD%\artifacts\typecheck-log.txt" 2>&1
 if errorlevel 1 (echo   type errors found, see artifacts\typecheck-log.txt - building anyway) else (echo   ok)
 
-echo === embedded Silero voice: models into APK ===
-set "SILERO_SRC=%CD%\artifacts\silero-onnx\result3\app-assets"
-set "SILERO_DST=%CD%\modules\imeet-voice\android\src\main\assets\silero"
-if not exist "%SILERO_SRC%\vocoder.onnx" goto silero_missing
-if not exist "%SILERO_DST%" mkdir "%SILERO_DST%"
-robocopy "%SILERO_SRC%" "%SILERO_DST%" /MIR /NFL /NDL /NJH /NJS >nul
+echo === voice models are downloaded on first launch, not packed into the APK ===
+if exist "%CD%\modules\imeet-voice\android\src\main\assets\silero" rmdir /s /q "%CD%\modules\imeet-voice\android\src\main\assets\silero"
 echo   ok
-goto silero_done
-:silero_missing
-echo   models not found - run tools\silero-onnx\run.cmd first. Building without the embedded voice.
-:silero_done
 
 echo === 3/4 build + install APK (several minutes) ===
 set "NOPAUSE=1"

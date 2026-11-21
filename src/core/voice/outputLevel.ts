@@ -17,26 +17,49 @@ const native = Platform.OS === 'android'
   ? requireOptionalNativeModule<OutputLevelModule>('IMeetOutputLevel')
   : null;
 
+interface SileroLevelModule {
+  addListener(event: 'onSileroLevel', listener: (event: OutputLevel) => void): { remove(): void };
+}
+
+// Встроенный голос сам сообщает громкость того, что играет (по своим сэмплам) — точнее Visualizer.
+const silero = Platform.OS === 'android'
+  ? requireOptionalNativeModule<SileroLevelModule>('IMeetSilero')
+  : null;
+
 /**
  * Слушать звук на выходе (голос агента). Возвращает функцию отписки;
  * если устройство не даёт снимать общий выход — null.
  */
 export function listenOutputLevel(onLevel: (value: OutputLevel) => void): (() => void) | null {
-  if (!native) return null;
+  let lastOwnAt = 0;
+  const own = silero?.addListener('onSileroLevel', (value: OutputLevel) => {
+    lastOwnAt = Date.now();
+    onLevel(value);
+  });
+  // Системный выход (Visualizer) — для голоса, который играет не наш модуль (системный TTS).
   let started = false;
-  try {
-    started = native.start();
-  } catch {
-    started = false;
-  }
-  if (!started) return null;
-  const subscription = native.addListener('onOutputLevel', onLevel);
-  return () => {
-    subscription.remove();
+  if (native) {
     try {
-      native.stop();
+      started = native.start();
     } catch {
-      // уже остановлен
+      started = false;
+    }
+  }
+  const subscription = started && native
+    ? native.addListener('onOutputLevel', (value: OutputLevel) => {
+      if (Date.now() - lastOwnAt > 300) onLevel(value);
+    })
+    : null;
+  if (!own && !subscription) return null;
+  return () => {
+    own?.remove();
+    subscription?.remove();
+    if (started) {
+      try {
+        native?.stop();
+      } catch {
+        // уже остановлен
+      }
     }
   };
 }

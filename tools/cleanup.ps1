@@ -20,7 +20,7 @@ function Recycle($path) {
 }
 
 # 2. artifacts: старые APK, скриншоты, разбор RuVoice, отчёты Supertonic, старые логи.
-$keep = @('imeet-silero55.apk', 'ruvoice-tts-1.1.2.apk', 'ruvoice-pack-cis_ru.zip', 'build-log.txt', 'ship-log.txt', 'cleanup-log.txt')
+$keep = @('imeet-silero55.apk', 'build-log.txt', 'ship-log.txt', 'cleanup-log.txt')
 Get-ChildItem $art -File | Where-Object {
   $_.Name -notin $keep -and (
     $_.Extension -in @('.png', '.apk') -or
@@ -44,7 +44,16 @@ Get-ChildItem $art -File | Where-Object {
   'vendor',                                    # пустая папка от локального архива «Наслух»
   'assets\icons\ui\leaf.svg',                  # «Спокойная» в макете с иконкой лица, лист не нужен
   'tools\silero-onnx\export_onnx.py',          # первые пробы экспорта Silero; рабочий скрипт — export_v3.py
-  'tools\silero-onnx\export_v2.py'
+  'tools\silero-onnx\export_v2.py',
+  # RuVoice больше не нужен: голос встроен в iMeet.
+  'src\core\voice\deviceTts.ts',
+  'modules\imeet-voice\android\src\main\java\com\imeet\voice\IMeetDeviceTtsModule.kt',
+  'tools\silero-onnx\compare_ruvoice.py',
+  'tools\pull-compare.cmd',
+  'artifacts\compare',
+  'artifacts\ruvoice-tts-1.1.2.apk',
+  'artifacts\ruvoice-pack-cis_ru.zip',
+  'modules\imeet-voice\android\src\main\assets\silero'   # модели голоса скачиваются при первом запуске
 ) | ForEach-Object { Recycle (Join-Path $root $_) }
 
 # 4. Служебные метаданные C2PA в картинках (добавляются при передаче файлов из облака Claude):

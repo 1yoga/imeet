@@ -32,15 +32,33 @@ class SileroEngine private constructor(
   private val hop: Int,
   private val win: Int,
   private val window: FloatArray,
+  private val meanStdCoef: FloatArray,
+  private val rules: SileroRules?,
 ) {
+  /** rules — словари чтения RuVoice; pitch — высота голоса (1 — как модель; RuVoice у тебя играет ×0.86). */
+  data class Options(val rules: Boolean = true, val pitch: Float = 1f)
+
+  /** Куда пришлась граница куска — от этого зависит добавочная пауза после него. */
+  enum class Boundary { SENTENCE, COMMA, DASH, PARAGRAPH, END }
   val sampleRate = 48000
   val speakerNames: List<String> get() = speakers.keys.toList()
 
-  class Result(val audio: FloatArray, val accented: String, val synthMs: Long)
+  /** focusSymbols — сколько символов получили логическое ударение (0 — звёздочки не сработали). */
+  class Result(val audio: FloatArray, val accented: String, val types: String, val synthMs: Long, val focusSymbols: Int)
+
+  val homographs: Boolean get() = text.hasHomographs
+
+  /** Перед делением на куски: словари и омографы по всей реплике (кускам потом словари не нужны). */
+  fun prepareForChunks(raw: String, options: Options): String {
+    val ruled = if (options.rules && rules != null) rules.apply(raw) else raw
+    return text.homographHints(ruled)
+  }
+  val rulesInfo: String get() = rules?.let { "${it.ruleCount} правил, ${it.stressCount} слов" } ?: "нет"
 
   /** Озвучить текст (слова в *звёздочках* — логическое ударение). */
-  fun synthesize(input: String, speaker: String): Result {
+  fun synthesize(rawInput: String, speaker: String, options: Options = Options()): Result {
     val started = System.nanoTime()
+    val input = if (options.rules && rules != null) rules.apply(rawInput) else rawInput
     val plain = input.replace("*", "")
     val prepared = text.prepare(plain)
     require(prepared.any { it.isLetter() }) { "В реплике нет слов для озвучки" }
@@ -61,7 +79,12 @@ class SileroEngine private constructor(
       "seq" to longs(seq, 1, t), "spk" to longs(spk, 1),
       "type_ids" to longs(typeIds, 1, t), "focus" to longs(focus ?: LongArray(t), 1, t),
     )).first
-    for (i in pitch.indices) if (kotlin.math.abs(pitch[i]) < 0.001f) pitch[i] = 0f
+    // update_pitch_coef: нули остаются нулями, остальное p*c + (c-1)*mean_std_coef[диктор].
+    val c = options.pitch
+    val shift = (c - 1f) * meanStdCoef.getOrElse(spk[0].toInt()) { 0f }
+    for (i in pitch.indices) {
+      pitch[i] = if (kotlin.math.abs(pitch[i]) < 0.001f) 0f else pitch[i] * c + shift
+    }
 
     // 3. Акустика: encoder -> растяжка по длительностям -> decoder (3 части, дополнение до кратной длины).
     val (enc, encShape) = infer("encoder", mapOf("seq" to longs(seq, 1, t), "spk" to longs(spk, 1), "pitch" to floats(pitch, 1, 1, t)))
@@ -83,7 +106,8 @@ class SileroEngine private constructor(
       istft(toArray(mag.floatBuffer), toArray(phase.floatBuffer), shape[1].toInt(), shape[2].toInt())
     }
     melTensor.close()
-    return Result(voc, accented, (System.nanoTime() - started) / 1_000_000)
+    val focused = focus?.count { it != 0L } ?: 0
+    return Result(voc, accented, SileroText.classifyText(plain), (System.nanoTime() - started) / 1_000_000, focused)
   }
 
   private fun infer(name: String, inputs: Map<String, OnnxTensor>): Pair<FloatArray, LongArray> {
@@ -173,23 +197,56 @@ class SileroEngine private constructor(
   }
 
   companion object {
-    private const val DIR = "silero"
+
+    /** Деление реплики на предложения (как в Silero: после . ! ? и пробела). */
+    fun sentences(input: String): List<String> =
+      SileroText.SENT_SPLIT.split(input.trim()).map { it.trim() }.filter { s -> s.any { it.isLetter() } }
+
+    /**
+     * Деление на куски: абзацы (перевод строки), предложения, а при byPhrases ещё запятые / ; / :
+     * и тире между словами. Возвращает куски и тип границы после каждого.
+     */
+    fun split(input: String, byPhrases: Boolean): List<Pair<String, Boundary>> {
+      val out = ArrayList<Pair<String, Boundary>>()
+      val paragraphs = input.split(Regex("\\s*\\n\\s*")).filter { p -> p.any { it.isLetter() } }
+      paragraphs.forEachIndexed { pi, para ->
+        val splitter = if (byPhrases) PHRASE_SPLIT else SileroText.SENT_SPLIT
+        val pieces = splitter.split(para.trim()).map { it.trim() }.filter { it.isNotEmpty() }
+        val merged = ArrayList<String>()
+        for (p in pieces) {     // кусок без букв (одинокое тире) приклеиваем к следующему
+          if (merged.isNotEmpty() && !merged.last().any { it.isLetter() }) merged[merged.size - 1] = merged.last() + " " + p else merged.add(p)
+        }
+        merged.forEachIndexed { i, piece ->
+          val kind = when {
+            i == merged.size - 1 -> if (pi == paragraphs.size - 1) Boundary.END else Boundary.PARAGRAPH
+            merged[i + 1].startsWith("–") || merged[i + 1].startsWith("—") -> Boundary.DASH
+            piece.last() in ",;:" -> Boundary.COMMA
+            else -> Boundary.SENTENCE
+          }
+          out.add(piece to kind)
+        }
+      }
+      return out
+    }
+
+    private val PHRASE_SPLIT = Regex("(?<=[.!?…,;:])\\s+|\\s+(?=[–—]\\s)")
     private val MODELS = listOf("dur", "pitch", "pitch_focus", "encoder", "dec_pre", "dec_mid", "dec_post", "vocoder", "accent_heads")
 
-    fun assetsPresent(context: Context): Boolean =
-      runCatching { context.assets.list(DIR)?.contains("vocoder.onnx") == true }.getOrDefault(false)
+    /** Модели скачаны (или взяты из APK сборки для разработки) — см. VoiceModelStore. */
+    fun modelsReady(context: Context): Boolean = VoiceModelStore.isReady(context)
 
-    /** Модели лежат в APK (assets/silero); ONNX читает их из копии в памяти приложения. */
+    /** Модели лежат в папке приложения (VoiceModelStore); словари чтения — в APK (assets/rules). */
     fun load(context: Context): SileroEngine {
       val env = OrtEnvironment.getEnvironment()
-      val dir = File(context.noBackupFilesDir, "silero-onnx").apply { mkdirs() }
+      check(VoiceModelStore.isReady(context)) { "Модели голоса ещё не скачаны" }
+      val dir = VoiceModelStore.dir(context)
       val options = OrtSession.SessionOptions().apply {
         setIntraOpNumThreads(4)
         setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT)
       }
-      val sessions = MODELS.associateWith { name -> env.createSession(copyAsset(context, "$name.onnx", dir).absolutePath, options) }
+      val sessions = MODELS.associateWith { name -> env.createSession(File(dir, "$name.onnx").absolutePath, options) }
 
-      val cfg = JSONObject(readText(context, "config.json"))
+      val cfg = JSONObject(readText(dir, "config.json"))
       val symbols = cfg.getString("symbols")
       val s2i = HashMap<Char, Long>()
       cfg.getJSONObject("symbol_to_id").let { o -> o.keys().forEach { k -> s2i[k[0]] = o.getLong(k) } }
@@ -199,43 +256,44 @@ class SileroEngine private constructor(
       require(istft.getString("padding") == "same") { "Неожиданный режим iSTFT" }
 
       // Файлы записаны на Windows: строки могут кончаться на \r\n — lines() понимает оба варианта.
-      val ngrams = readText(context, "accent_ngrams.txt").lines().map { it.trim() }.dropLastWhile { it.isEmpty() }
+      val ngrams = readText(dir, "accent_ngrams.txt").lines().map { it.trim() }.dropLastWhile { it.isEmpty() }
       val ngramIds = HashMap<String, Int>(ngrams.size * 2)
       ngrams.forEachIndexed { i, g -> ngramIds[g] = i }
-      val emb = readFloats(context, "accent_emb.f32")
+      val emb = readFloats(dir, "accent_emb.f32")
       require(emb.size % ngrams.size == 0) { "Словарь ударений не совпадает с таблицей: ${ngrams.size} n-грамм" }
       val dim = emb.size / ngrams.size
       val exceptions = HashMap<String, Pair<Int, Int>>()
-      readText(context, "accent_exceptions.tsv").lines().forEach { line ->
+      readText(dir, "accent_exceptions.tsv").lines().forEach { line ->
         val p = line.trim().split('\t')
         if (p.size == 3) exceptions[p[0]] = Pair(p[1].toInt(), p[2].toInt())
       }
       val accentor = SileroAccentor(env, sessions.getValue("accent_heads"), ngramIds, emb, dim, exceptions)
-      val text = SileroText(symbols, s2i, cfg.getString("sos")[0], cfg.getString("eos")[0], accentor)
+      // Омографы — если их модель вложена в сборку (tools/silero-onnx/run.cmd её экспортирует).
+      val homo = if (File(dir, "homo.onnx").exists()) {
+        SileroHomo(env, env.createSession(File(dir, "homo.onnx").absolutePath, options),
+          readText(dir, "homo_tokenizer.json"), readText(dir, "homodict.json"))
+      } else null
+      val text = SileroText(symbols, s2i, cfg.getString("sos")[0], cfg.getString("eos")[0], accentor, homo)
+      val msc = cfg.optJSONArray("mean_std_coef")
+      val meanStd = FloatArray(msc?.length() ?: 0) { msc!!.getDouble(it).toFloat() }
+      // Словари чтения (assets/rules, из экспорта настроек RuVoice) — если вложены в сборку.
+      val rules = runCatching {
+        val replace = context.assets.open("rules/replace.txt").use { it.readBytes().toString(Charsets.UTF_8) } + "\n" +
+          runCatching { context.assets.open("rules/custom.txt").use { it.readBytes().toString(Charsets.UTF_8) } }.getOrDefault("")
+        val stress = context.assets.open("rules/stress.txt").use { it.readBytes().toString(Charsets.UTF_8) }
+        SileroRules(replace, stress)
+      }.getOrNull()
       return SileroEngine(
         env, sessions, text, speakers, cfg.getInt("decoder_multiple"),
-        istft.getInt("n_fft"), istft.getInt("hop"), istft.getInt("win"), readFloats(context, "istft_window.f32"),
+        istft.getInt("n_fft"), istft.getInt("hop"), istft.getInt("win"), readFloats(dir, "istft_window.f32"),
+        meanStd, rules,
       )
     }
 
-    /** Копия модели из APK в память приложения; обновляется после каждой установки новой версии APK. */
-    private fun copyAsset(context: Context, name: String, dir: File): File {
-      val target = File(dir, name)
-      val stamp = File(dir, "$name.stamp")
-      val installed = context.packageManager.getPackageInfo(context.packageName, 0).lastUpdateTime.toString()
-      if (target.exists() && stamp.exists() && stamp.readText() == installed) return target
-      val tmp = File(dir, "$name.tmp")
-      context.assets.open("$DIR/$name").use { input -> tmp.outputStream().use { input.copyTo(it, 1 shl 20) } }
-      if (!tmp.renameTo(target)) { target.delete(); check(tmp.renameTo(target)) { "Не удалось сохранить модель $name" } }
-      stamp.writeText(installed)
-      return target
-    }
+    private fun readText(dir: File, name: String) = File(dir, name).readText(Charsets.UTF_8)
 
-    private fun readText(context: Context, name: String) =
-      context.assets.open("$DIR/$name").use { it.readBytes().toString(Charsets.UTF_8) }
-
-    private fun readFloats(context: Context, name: String): FloatArray {
-      val bytes = context.assets.open("$DIR/$name").use { it.readBytes() }
+    private fun readFloats(dir: File, name: String): FloatArray {
+      val bytes = File(dir, name).readBytes()
       val fb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN).asFloatBuffer()
       return FloatArray(fb.remaining()).also { fb.get(it) }
     }

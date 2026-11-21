@@ -27,7 +27,8 @@ const BACKCHANNEL_GAP_SEC = 0.4;
 const BACKCHANNEL_MIN_SEC = 0.5;
 
 export const defaultConversationSettings: ConversationSettings = {
-  endOfPhraseSec: 2.5,
+  // 1,5 с: заметно быстрее ответ (2,5 с давали ~60% всего ожидания), но ещё не перебивает задумавшегося.
+  endOfPhraseSec: 1.5,
   replyDelaySec: 0,
   backchannelPauseSec: 1,
   bargeIn: true,

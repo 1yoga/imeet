@@ -1,0 +1,8 @@
+{
+ "pause_sentence": 0,
+ "pause_paragraph": 300,
+ "pause_comma": 100,
+ "pause_dash": 150,
+ "max_len": 400,
+ "focus_level": 3
+}

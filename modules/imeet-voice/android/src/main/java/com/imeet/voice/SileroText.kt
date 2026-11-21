@@ -18,6 +18,7 @@ class SileroText(
   private val sos: Char,
   private val eos: Char,
   private val accentor: SileroAccentor,
+  private val homo: SileroHomo?,
 ) {
   private val allowed: Set<Char> = (symbols.substring(3) + "^").toSet()
 
@@ -33,7 +34,43 @@ class SileroText(
     return t
   }
 
-  fun accent(prepared: String): String = accentor.accent(prepared)
+  /** SileroStress: сначала омографы (замо́к / за́мок), потом ударения остальных слов. */
+  fun accent(prepared: String): String = accentor.accent(homo?.solve(prepared) ?: prepared)
+
+  val hasHomographs: Boolean get() = homo != null
+
+  /**
+   * Омографы по всей реплике до деления на куски: короткий кусок даёт BERT мало смысла
+   * («что ты написал.» → «нап+исал»). Возвращает исходный текст, где у омографов уже стоит «+».
+   */
+  fun homographHints(raw: String): String {
+    val solver = homo ?: return raw
+    val prepared = prepare(raw.replace("*", ""))
+    val solved = solver.solve(prepared)
+    if (solved == prepared) return raw
+    val solvedWords = SOLVED_WORD.findAll(solved).map { it.value }.toList()
+    val rawWords = RAW_WORD.findAll(raw).toList()
+    if (solvedWords.size != rawWords.size) return raw
+    val out = StringBuilder()
+    var last = 0
+    rawWords.forEachIndexed { i, m ->
+      val s = solvedWords[i]
+      out.append(raw, last, m.range.first)
+      if (s.contains('+') && !m.value.contains('+') && s.replace("+", "").length == m.value.length) {
+        var k = 0
+        for (ch in s) {
+          if (ch == '+') { out.append('+'); continue }
+          out.append(if (m.value[k].isUpperCase()) ch.uppercaseChar() else ch)
+          k++
+        }
+      } else {
+        out.append(m.value)
+      }
+      last = m.range.last + 1
+    }
+    out.append(raw, last, raw.length)
+    return out.toString()
+  }
 
   /** preprocess_tacotron: sos + текст + eos -> номера символов. */
   fun toIds(accented: String): LongArray {
@@ -94,6 +131,8 @@ class SileroText(
 
   companion object {
     val WHITESPACE = Regex("\\s+")
+    private val SOLVED_WORD = Regex("[а-яё+]+")
+    private val RAW_WORD = Regex("[А-Яа-яЁё+]+")
     val SENT_SPLIT = Regex("(?<=[.!?])\\s+")
     val TYPE2ID = mapOf("st" to 0L, "wh_q" to 1L, "general_q" to 2L, "alternative_q" to 3L, "tag_q" to 4L, "exclam" to 5L)
 
@@ -115,7 +154,8 @@ class SileroText(
         "(?:[,\\s]+ведь\\s*\\?$)|(?:[,\\s]+а\\s*\\?$)",
       RegexOption.IGNORE_CASE,
     )
-    private val OR_RE = Regex("(?U)\\bили\\b", RegexOption.IGNORE_CASE)
+    // \b по Юникоду: флаг (?U) Android не поддерживает, поэтому границы слова заданы явно.
+    private val OR_RE = Regex("(?<![\\p{L}\\p{N}_])или(?![\\p{L}\\p{N}_])", RegexOption.IGNORE_CASE)
     private val WORD_RE = Regex("[а-яёa-z]+", RegexOption.IGNORE_CASE)
     private val QUOTE_OPEN = setOf('"', '«', '“', '„')
     private val QUOTE_CLOSE = setOf('"', '»', '”', '’')
@@ -229,6 +269,17 @@ class SileroAccentor(
         result.append(raw); return@forEachIndexed
       }
       exceptions[clean[i]]?.let { (sPos, yPos) ->
+        if (haveStress) {
+          // Ударение уже поставил решатель омографов: «ё» из словаря — только если совпадает с ним.
+          val marks = raw.indices.filter { raw[it] == '+' }
+          var word = raw.replace("+", "")
+          if (yPos != -1 && (yPos + 1) in marks && yPos < word.length) {
+            word = word.substring(0, yPos) + (if (word[yPos].isLowerCase()) "ё" else "Ё") + word.substring(yPos + 1)
+          }
+          for (m in marks) word = word.substring(0, m) + "+" + word.substring(m)
+          result.append(word)
+          return@forEachIndexed
+        }
         if (yPos != -1 && yPos < raw.length) raw = raw.substring(0, yPos) + (if (raw[yPos].isLowerCase()) "ё" else "Ё") + raw.substring(yPos + 1)
         result.append(raw.substring(0, sPos)).append('+').append(raw.substring(sPos))
         return@forEachIndexed
@@ -239,9 +290,11 @@ class SileroAccentor(
       var setStress = sp[sIdx] > 0.5f && !haveStress
       val yIdx = argmax(yp)
       val setYo = yp[yIdx] > 0.5f
+      // Если ударение уже стоит (омограф), «ё» сверяем с ним, а не с предсказанием.
+      val stressedIds = if (haveStress) low.split('+').map { part -> part.count { it in VOWELS } } else listOf(sIdx)
       val vowelIds = low.indices.filter { low[it] in VOWELS }
       val yeIds = low.indices.filter { low[it] == 'е' }
-      var stressPos = if (sIdx < vowelIds.size) listOf(vowelIds[sIdx]) else emptyList()
+      var stressPos = stressedIds.filter { it < vowelIds.size }.map { vowelIds[it] }
       val yoPos = if (yIdx > 0 && yIdx - 1 < yeIds.size) listOf(yeIds[yIdx - 1]) else emptyList()
       if (vowelIds.isEmpty()) { result.append(raw); return@forEachIndexed }
       for (y in yoPos) {
