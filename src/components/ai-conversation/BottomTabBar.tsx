@@ -48,6 +48,8 @@ export function BottomTabBar({
   return (
     <View style={[styles.container, { bottom: bottomInset, width }]}>
       <View style={[styles.glassBar, { borderRadius: 28 * scale, height: 52 * scale }]}>
+        {/* Плотная подложка под стеклом: подписи читаются над любым содержимым. */}
+        <View style={[styles.underlay, { borderRadius: 28 * scale }]} />
         <GlassSurface style={[styles.glassEffect, { borderRadius: 28 * scale }]} />
         {tabs.map((tab) => {
           const isActive = tab.key === activeTab;
@@ -106,6 +108,10 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     overflow: 'hidden',
     paddingHorizontal: 2,
+  },
+  underlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(8, 6, 28, 0.82)',
   },
   glassEffect: {
     borderRadius: 28,

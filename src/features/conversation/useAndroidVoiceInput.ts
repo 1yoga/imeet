@@ -154,9 +154,19 @@ async function prepareTts(sileroVoiceId: string, sileroAvailable: boolean | null
   return system;
 }
 
-export function useAndroidVoiceInput() {
+/** Откуда берутся ответы агента: общий разговор или, например, вопросы о кандидате. */
+export interface ReplySession {
+  replyTo(text: string): string;
+}
+
+export interface VoiceInputOptions {
+  createReplies?: () => ReplySession;
+}
+
+export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   const current = useRef<Conversation | null>(null);
-  const replies = useRef(mockConversationService.createSession());
+  const replies = useRef<ReplySession | null>(null);
+  replies.current ??= options.createReplies?.() ?? mockConversationService.createSession();
   const [model, setModel] = useState<ModelState>(() => modelReady
     ? { phase: 'ready' }
     : { phase: 'loading', message: 'Проверяем модель речи…' });
@@ -284,7 +294,10 @@ export function useAndroidVoiceInput() {
   }, []);
 
   const start = async () => {
-    if (!speech || !modelReady || current.current || voiceInUse) return;
+    if (!speech || !modelReady || current.current) return;
+    // При переходе между экранами предыдущий ещё освобождает микрофон: ждём до 2 с.
+    for (let i = 0; voiceInUse && i < 40; i++) await new Promise((resolve) => setTimeout(resolve, 50));
+    if (voiceInUse || current.current) return;
 
     const session: Conversation = {
       cancelled: false,
@@ -398,7 +411,7 @@ export function useAndroidVoiceInput() {
         if (!text) continue;
 
         const recognizedAt = Date.now();
-        const answer = replies.current.replyTo(text);
+        const answer = replies.current!.replyTo(text);
         setTranscript(text);
         setReply(stripFocusMarks(answer));
         setTimings({ recognitionMs: recognizingAt ? recognizedAt - recognizingAt : undefined });
@@ -502,7 +515,7 @@ export function useAndroidVoiceInput() {
     setTextBusy(true);
     stopTextPlayback();
     const sentAt = Date.now();
-    const answer = replies.current.replyTo(text);
+    const answer = replies.current!.replyTo(text);
     setTranscript(text);
     setReply(stripFocusMarks(answer));
     setTimings({});

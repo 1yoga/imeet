@@ -4,7 +4,7 @@ setlocal
 cd /d "%~dp0.."
 set "VER=0.2.0"
 set "LOG=%CD%\artifacts\ship-log.txt"
-echo ship v1 > "%LOG%"
+echo ship v3 > "%LOG%"
 
 echo === 1/4 Naslukh %VER% from npm ===
 findstr /c:"\"@naslukh/speech-rn\": \"%VER%\"" package.json >nul && goto naslukh_ok
@@ -18,13 +18,22 @@ if errorlevel 1 goto fail
 :naslukh_ok
 echo ok
 
-echo === 2/4 wave engine: Skia + Reanimated ===
+echo === 2/4 native packages: Skia, Reanimated, image picker, blur ===
 if exist "node_modules\@shopify\react-native-skia\package.json" if exist "node_modules\react-native-reanimated\package.json" goto engine_ok
 call npx expo install @shopify/react-native-skia react-native-reanimated react-native-worklets >> "%LOG%" 2>&1
 if errorlevel 1 goto fail
 if exist "%TEMP%\metro-cache" rmdir /s /q "%TEMP%\metro-cache"
 :engine_ok
+if exist "node_modules\expo-image-picker\package.json" if exist "node_modules\expo-blur\package.json" goto picker_ok
+echo installing expo-image-picker and expo-blur...
+call npx expo install expo-image-picker expo-blur >> "%LOG%" 2>&1
+if errorlevel 1 goto fail
+:picker_ok
 echo ok
+
+echo === typecheck (log: artifacts\typecheck-log.txt) ===
+call npx tsc --noEmit > "%CD%\artifacts\typecheck-log.txt" 2>&1
+if errorlevel 1 (echo   type errors found, see artifacts\typecheck-log.txt - building anyway) else (echo   ok)
 
 echo === 3/4 build + install APK (several minutes) ===
 set "NOPAUSE=1"
@@ -32,9 +41,9 @@ call "%~dp0build-android.cmd"
 if errorlevel 1 goto fail
 
 echo === 4/4 git commit ===
-git add .gitignore package.json package-lock.json app.json src tools docs README.md
+git add .gitignore package.json package-lock.json app.json assets src tools docs README.md
 git diff --cached --quiet && goto nothing
-git commit -m "Live dialog via Naslukh 0.2.0 and GPU voice wave" -m "Backchannel reactions in pauses, barge-in, wave driven by mic level; Skia shader wave with Reanimated; Naslukh from npm." -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
+git commit -m "Match card, candidate profile, photo viewer, chat, profile menu with dialogs, countdown, blur" -m "Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>" -m "Claude-Session: https://claude.ai/code/session_01CG6Gxyr1557TZH23ZjFt1G"
 if errorlevel 1 goto fail
 goto done
 :nothing

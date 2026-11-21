@@ -1,5 +1,6 @@
 import { router, type Href } from 'expo-router';
 import { useEffect, useState } from 'react';
+import { Image } from 'expo-image';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ConversationButton } from '@/components/ai-conversation/ConversationButton';
@@ -20,7 +21,11 @@ interface ProfileVoiceSettingsProps {
   selectedId: string;
   top: number;
   bottom: number;
+  /** Возврат в меню профиля. */
+  onBack?: () => void;
 }
+
+const backIcon = require('../../../assets/icons/ui/arrow-left.svg');
 
 const format = (sec: number) => `${sec.toFixed(1).replace('.', ',')} с`;
 
@@ -69,7 +74,7 @@ function Stepper({ label, hint, value, limits, onChange, offAtMin = false }: {
 }
 
 export function ProfileVoiceSettings({
-  available, onChange, selectedId, settings, onSettingsChange, top, bottom,
+  available, onChange, selectedId, settings, onSettingsChange, top, bottom, onBack,
 }: ProfileVoiceSettingsProps) {
   const [playing, setPlaying] = useState(false);
   const [error, setError] = useState('');
@@ -104,11 +109,19 @@ export function ProfileVoiceSettings({
   };
 
   return (
+    // Список заканчивается над панелью вкладок: текст не уходит под полупрозрачное стекло.
     <ScrollView
-      contentContainerStyle={[styles.content, { paddingTop: top, paddingBottom: bottom }]}
-      style={StyleSheet.absoluteFill}
+      contentContainerStyle={[styles.content, { paddingTop: top, paddingBottom: 24 }]}
+      style={[styles.scroller, { bottom }]}
     >
-      <Text style={styles.title}>Профиль</Text>
+      <View style={styles.titleRow}>
+        {onBack && (
+          <Pressable accessibilityLabel="Назад" accessibilityRole="button" hitSlop={10} onPress={onBack}>
+            <Image contentFit="contain" source={backIcon} style={styles.back} />
+          </Pressable>
+        )}
+        <Text style={styles.title}>Голос и паузы</Text>
+      </View>
       <Text style={styles.heading}>Голос собеседника</Text>
       <View accessibilityLabel="Голос собеседника" accessibilityRole="radiogroup" style={styles.voices}>
         {voices.map((voice) => {
@@ -198,8 +211,11 @@ export function ProfileVoiceSettings({
 }
 
 const styles = StyleSheet.create({
+  scroller: { left: 0, position: 'absolute', right: 0, top: 0 },
   content: { gap: 12, paddingHorizontal: 16 },
   title: { ...typography.title, color: colors.white },
+  titleRow: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  back: { height: 24, width: 24 },
   heading: { ...typography.subtitle, color: colors.white, marginTop: 12 },
   voices: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   voice: { borderColor: colors.glassBorder, borderRadius: 100, borderWidth: 1, paddingHorizontal: 16, paddingVertical: 10 },
