@@ -198,14 +198,16 @@ class SileroEngine private constructor(
       val istft = cfg.getJSONObject("istft")
       require(istft.getString("padding") == "same") { "Неожиданный режим iSTFT" }
 
-      val ngrams = readText(context, "accent_ngrams.txt").split('\n')
+      // Файлы записаны на Windows: строки могут кончаться на \r\n — lines() понимает оба варианта.
+      val ngrams = readText(context, "accent_ngrams.txt").lines().map { it.trim() }.dropLastWhile { it.isEmpty() }
       val ngramIds = HashMap<String, Int>(ngrams.size * 2)
       ngrams.forEachIndexed { i, g -> ngramIds[g] = i }
       val emb = readFloats(context, "accent_emb.f32")
+      require(emb.size % ngrams.size == 0) { "Словарь ударений не совпадает с таблицей: ${ngrams.size} n-грамм" }
       val dim = emb.size / ngrams.size
       val exceptions = HashMap<String, Pair<Int, Int>>()
-      readText(context, "accent_exceptions.tsv").split('\n').forEach { line ->
-        val p = line.split('\t')
+      readText(context, "accent_exceptions.tsv").lines().forEach { line ->
+        val p = line.trim().split('\t')
         if (p.size == 3) exceptions[p[0]] = Pair(p[1].toInt(), p[2].toInt())
       }
       val accentor = SileroAccentor(env, sessions.getValue("accent_heads"), ngramIds, emb, dim, exceptions)
