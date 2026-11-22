@@ -11,6 +11,7 @@ import { AppState, PermissionsAndroid, Platform } from 'react-native';
 import { hasAndroidTts, loadAndroidTts } from '@/core/voice/androidTts';
 import type { TtsEngine, TtsPlaybackHandle } from '@/core/voice/contracts';
 import {
+  bargeInProfiles,
   type ConversationSettings,
   defaultConversationSettings,
   loadConversationSettings,
@@ -79,11 +80,20 @@ interface Conversation {
   bargeInOff?: boolean;
 }
 
+/** Слова от трёх букв, без регистра и «ё»: для сравнения распознанного текста с ответом агента. */
+const significantWords = (value: string) => value.toLowerCase().replace(/ё/g, 'е').match(/[а-я]{3,}/g) ?? [];
+
 /**
- * Перебивание строже, чем распознавание: голос самого агента из динамика и шум
- * не должны его останавливать. Порог уверенности Silero и сколько длится речь.
+ * Микрофон поймал голос самого агента из динамика: распознанный «ответ пользователя» — кусок его же реплики.
+ * Распознавание слегка путает слова («что» → «кто»), поэтому смотрим долю совпавших слов, а не точное вхождение.
  */
-const BARGE_IN = { vadThreshold: 0.85, minSpeechMs: 700 } as const;
+function looksLikeEcho(heard: string, spoken: string) {
+  const heardWords = significantWords(heard);
+  if (heardWords.length < 3) return false;
+  const spokenWords = new Set(significantWords(stripFocusMarks(spoken)));
+  const shared = heardWords.filter((word) => spokenWords.has(word)).length;
+  return shared / heardWords.length >= 0.75;
+}
 
 function prepareModel() {
   if (!speech || modelReady) return Promise.resolve();
@@ -178,7 +188,7 @@ interface PreparedTts {
 async function prepareTts(voiceId: string): Promise<PreparedTts> {
   const chosen = findVoice(voiceId);
   if (chosen?.kind === 'embedded' && hasEmbeddedSilero) {
-    const engine = createEmbeddedTtsEngine(chosen.speaker);
+    const engine = createEmbeddedTtsEngine(chosen.speaker, () => settingsRef.current.communicationOutput);
     try {
       await engine.initialize();
       return { engine, voiceId, fallback: false };
@@ -470,14 +480,17 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         if (session.cancelled) return;
         const recognizedAt = Date.now();
         let answer: string;
-        if (text) {
+        // После перебивания распознанный текст может оказаться самой репликой агента (эхо из динамика).
+        const echo = Boolean(text) && Boolean(continueFromMonitor) && Boolean(session.interruptedAnswer)
+          && looksLikeEcho(text, session.interruptedAnswer ?? '');
+        if (text && !echo) {
           session.interruptedAnswer = undefined;
           answer = replies.current!.replyTo(text);
           setTranscript(text);
           setReply(stripFocusMarks(answer));
           setTimings({ recognitionMs: recognizingAt ? recognizedAt - recognizingAt : undefined });
         } else if (continueFromMonitor && session.interruptedAnswer) {
-          // Агента «перебил» шум или его же голос из динамика: договариваем ответ
+          // Агента «перебил» шум или его же голос из динамика (текст пуст или это эхо ответа): договариваем ответ
           // и до конца сеанса больше не останавливаемся на звук.
           answer = session.interruptedAnswer;
           session.interruptedAnswer = undefined;
@@ -511,7 +524,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         let interrupted = false;
         if (settingsRef.current.bargeIn && !session.bargeInOff && speech.monitorSpeech) {
           try {
-            monitor = await speech.monitorSpeech(BARGE_IN);
+            monitor = await speech.monitorSpeech(bargeInProfiles[settingsRef.current.bargeInSensitivity]);
             monitor.onSpeech(() => {
               interrupted = true;
               session.interruptedAnswer = answer;

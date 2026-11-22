@@ -3,7 +3,7 @@ import { Platform } from 'react-native';
 
 import type { TtsEngine, TtsStreamRequest } from './contracts';
 
-/** Встроенный голос Silero: модели ONNX лежат в APK, синтез на телефоне без RuVoice (modules/imeet-voice). */
+/** Встроенный голос Silero: модели ONNX скачиваются при первом запуске, синтез на телефоне без RuVoice (modules/imeet-voice). */
 type SileroStatus = { bundled: boolean; loaded: boolean; loadMs: number };
 export type SileroStart = { requestId: number; firstFrameMs: number; synthMs: number; audioMs: number; accented: string; types: string };
 /** Итог всей реплики: при делении на предложения — сумма по кускам; gapMs — тишина, когда следующий кусок не успел. */
@@ -86,6 +86,8 @@ type PlayOptions = {
   pitch?: number;
   /** Словари чтения RuVoice (ударения и подсказки омографов). */
   rules?: boolean;
+  /** Играть как голосовой вызов: эхоподавление лучше слышит звук агента (экспериментально). */
+  communication?: boolean;
   /** Сохранить звук в files/compare/<имя>.wav на телефоне. */
   recordName?: string;
   onStart?: (event: SileroStart) => void;
@@ -93,7 +95,7 @@ type PlayOptions = {
 };
 
 /** Озвучить реплику; onStart — когда звук пошёл, onDone — когда синтезированы все куски. */
-export async function playEmbeddedSilero(text: string, speaker: string, { split = 'whole', pauses = noPauses, pitch = 1, rules = true, recordName = '', onStart, onDone }: PlayOptions = {}) {
+export async function playEmbeddedSilero(text: string, speaker: string, { split = 'whole', pauses = noPauses, pitch = 1, rules = true, communication = false, recordName = '', onStart, onDone }: PlayOptions = {}) {
   if (!native) throw new Error('Нужна новая Android-сборка iMeet');
   const requestId = nextRequestId++;
   const started = native.addListener('onSileroStart', (event) => {
@@ -108,6 +110,7 @@ export async function playEmbeddedSilero(text: string, speaker: string, { split 
       pauses,
       pitch,
       rules,
+      communication,
       recordName,
     });
   } finally {
@@ -144,14 +147,14 @@ async function* phrasesFrom(chunks: AsyncIterable<string>) {
 }
 
 /** Встроенный Silero как движок озвучки разговора. */
-export function createEmbeddedTtsEngine(speaker: string): TtsEngine {
+export function createEmbeddedTtsEngine(speaker: string, communicationOutput: () => boolean = () => false): TtsEngine {
   return {
     id: `embedded:${speaker}`,
     async initialize() {
       await loadEmbeddedSilero();
     },
     async speak({ text, onStart }) {
-      const finished = playEmbeddedSilero(text, speaker, { ...embeddedDefaults, onStart: () => onStart?.() });
+      const finished = playEmbeddedSilero(text, speaker, { ...embeddedDefaults, communication: communicationOutput(), onStart: () => onStart?.() });
       return { finished, stop: stopEmbeddedSilero };
     },
     speakStream({ chunks, onStart }: TtsStreamRequest) {
@@ -164,7 +167,7 @@ export function createEmbeddedTtsEngine(speaker: string): TtsEngine {
       });
       const finished = (async () => {
         try {
-          await mod.streamStart(requestId, speaker, { pauses: embeddedDefaults.pauses, pitch: embeddedDefaults.pitch, rules: embeddedDefaults.rules });
+          await mod.streamStart(requestId, speaker, { pauses: embeddedDefaults.pauses, pitch: embeddedDefaults.pitch, rules: embeddedDefaults.rules, communication: communicationOutput() });
           for await (const phrase of phrasesFrom(chunks)) {
             if (stopped) break;
             await mod.streamAppend(requestId, phrase);

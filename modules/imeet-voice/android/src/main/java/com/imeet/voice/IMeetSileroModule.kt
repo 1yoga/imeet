@@ -1,8 +1,12 @@
 package com.imeet.voice
 
+import android.content.Context
 import android.media.AudioAttributes
+import android.media.AudioDeviceInfo
 import android.media.AudioFormat
+import android.media.AudioManager
 import android.media.AudioTrack
+import android.os.Build
 import android.os.SystemClock
 import android.util.Log
 import expo.modules.kotlin.Promise
@@ -27,6 +31,8 @@ class IMeetSileroModule : Module() {
   @Volatile private var track: AudioTrack? = null
   @Volatile private var generation = 0
   @Volatile private var stream: Stream? = null
+  /** Играть как голосовой вызов: эхоподавление микрофона получает звук агента как опорный сигнал. */
+  @Volatile private var communication = false
 
   /** Потоковая реплика: текст приходит порциями (например, от LLM), звук идёт, не дожидаясь конца. */
   private class Stream(
@@ -63,6 +69,7 @@ class IMeetSileroModule : Module() {
     AsyncFunction("streamStart") { requestId: Int, speaker: String, options: Map<String, Any?> ->
       val gen = ++generation
       stopTrack()
+      setCommunication(options["communication"] as? Boolean ?: false)
       @Suppress("UNCHECKED_CAST")
       val pauseMap = (options["pauses"] as? Map<String, Any?>).orEmpty().mapValues { (it.value as? Number)?.toInt() ?: 0 }
       val synthOptions = SileroEngine.Options(
@@ -130,6 +137,7 @@ class IMeetSileroModule : Module() {
       val pauseMap = (options["pauses"] as? Map<String, Any?>).orEmpty().mapValues { (it.value as? Number)?.toInt() ?: 0 }
       val gen = ++generation
       stopTrack()
+      setCommunication(options["communication"] as? Boolean ?: false)
       val requestedAt = SystemClock.elapsedRealtime()
       worker.execute {
         val futures = ArrayList<Future<SileroEngine.Result?>>()
@@ -241,6 +249,7 @@ class IMeetSileroModule : Module() {
     OnDestroy {
       generation++
       stopTrack()
+      setCommunication(false)
       worker.shutdown()
       synth.shutdown()
     }
@@ -283,7 +292,7 @@ class IMeetSileroModule : Module() {
     val minBuffer = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
     val output = AudioTrack.Builder()
       .setAudioAttributes(AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setUsage(outputUsage())
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
         .build())
       .setAudioFormat(AudioFormat.Builder()
@@ -485,7 +494,7 @@ class IMeetSileroModule : Module() {
     val minBuffer = AudioTrack.getMinBufferSize(rate, AudioFormat.CHANNEL_OUT_MONO, AudioFormat.ENCODING_PCM_FLOAT)
     return AudioTrack.Builder()
       .setAudioAttributes(AudioAttributes.Builder()
-        .setUsage(AudioAttributes.USAGE_MEDIA)
+        .setUsage(outputUsage())
         .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
         .build())
       .setAudioFormat(AudioFormat.Builder()
@@ -496,6 +505,41 @@ class IMeetSileroModule : Module() {
       .setTransferMode(AudioTrack.MODE_STREAM)
       .setBufferSizeInBytes(max(minBuffer, rate / 5 * 4))
       .build()
+  }
+
+  private fun outputUsage() =
+    if (communication) AudioAttributes.USAGE_VOICE_COMMUNICATION else AudioAttributes.USAGE_MEDIA
+
+  /**
+   * Включает или выключает режим «голосового вызова» для озвучки. Такой звук по умолчанию идёт в разговорный динамик,
+   * поэтому, если не подключены наушники, направляем его на громкий. Выключение возвращает маршрут системе.
+   */
+  private fun setCommunication(on: Boolean) {
+    val changed = communication != on
+    communication = on
+    if (!changed) return
+    try {
+      val context = appContext.reactContext ?: return
+      val audio = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+      val headset = audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).any {
+        it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_WIRED_HEADPHONES ||
+          it.type == AudioDeviceInfo.TYPE_USB_HEADSET || it.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+          it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+      }
+      if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        if (on && !headset) {
+          audio.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER }
+            ?.let { audio.setCommunicationDevice(it) }
+        } else {
+          audio.clearCommunicationDevice()
+        }
+      } else {
+        @Suppress("DEPRECATION")
+        audio.isSpeakerphoneOn = on && !headset
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "communication route failed", t)
+    }
   }
 
   /** Вся цепочка причин: «ExceptionInInitializerError» сам по себе ничего не говорит. */

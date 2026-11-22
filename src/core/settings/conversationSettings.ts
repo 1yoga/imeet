@@ -1,5 +1,25 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+/** Насколько легко звук пользователя останавливает агента. */
+export type BargeInSensitivity = 'low' | 'medium' | 'high';
+
+/**
+ * Параметры монитора речи для каждого уровня: порог Silero VAD и сколько речи нужно до срабатывания.
+ * «high» — прежнее поведение; «low» почти не реагирует на шум и короткие звуки.
+ * Значения стартовые, подбираются на устройстве.
+ */
+export const bargeInProfiles: Record<BargeInSensitivity, { vadThreshold: number; minSpeechMs: number }> = {
+  low: { vadThreshold: 0.93, minSpeechMs: 1200 },
+  medium: { vadThreshold: 0.9, minSpeechMs: 900 },
+  high: { vadThreshold: 0.85, minSpeechMs: 700 },
+};
+
+export const bargeInSensitivityLabels: Record<BargeInSensitivity, string> = {
+  low: 'Низкая',
+  medium: 'Средняя',
+  high: 'Высокая',
+};
+
 export interface ConversationSettings {
   /** Сколько секунд тишины считать концом реплики пользователя (VAD). */
   endOfPhraseSec: number;
@@ -12,6 +32,13 @@ export interface ConversationSettings {
   backchannelPauseSec: number;
   /** Можно перебить агента голосом: микрофон слушает, пока агент говорит. */
   bargeIn: boolean;
+  /** Чувствительность перебивания: на какой звук агент замолкает. */
+  bargeInSensitivity: BargeInSensitivity;
+  /**
+   * Озвучка как «голосовой вызов» (USAGE_VOICE_COMMUNICATION), чтобы эхоподавление телефона знало, что играет агент.
+   * Экспериментально: может изменить громкость (регулируется кнопками как громкость разговора) и маршрут звука.
+   */
+  communicationOutput: boolean;
 }
 
 export const settingLimits = {
@@ -32,6 +59,8 @@ export const defaultConversationSettings: ConversationSettings = {
   replyDelaySec: 0,
   backchannelPauseSec: 1,
   bargeIn: true,
+  bargeInSensitivity: 'medium',
+  communicationOutput: false,
 };
 
 const key = '@imeet/conversation-settings-v1';
@@ -57,6 +86,11 @@ export function normalizeSettings(raw: Partial<ConversationSettings>): Conversat
     replyDelaySec: clamp(raw.replyDelaySec, settingLimits.replyDelaySec, defaultConversationSettings.replyDelaySec),
     backchannelPauseSec,
     bargeIn: typeof raw.bargeIn === 'boolean' ? raw.bargeIn : defaultConversationSettings.bargeIn,
+    bargeInSensitivity:
+      raw.bargeInSensitivity === 'low' || raw.bargeInSensitivity === 'medium' || raw.bargeInSensitivity === 'high'
+        ? raw.bargeInSensitivity
+        : defaultConversationSettings.bargeInSensitivity,
+    communicationOutput: typeof raw.communicationOutput === 'boolean' ? raw.communicationOutput : defaultConversationSettings.communicationOutput,
   };
 }
 

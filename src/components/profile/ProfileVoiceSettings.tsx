@@ -4,7 +4,13 @@ import { Image } from 'expo-image';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { ConversationButton } from '@/components/ai-conversation/ConversationButton';
-import { backchannelMaxSec, type ConversationSettings, settingLimits } from '@/core/settings/conversationSettings';
+import {
+  backchannelMaxSec,
+  type BargeInSensitivity,
+  bargeInSensitivityLabels,
+  type ConversationSettings,
+  settingLimits,
+} from '@/core/settings/conversationSettings';
 import { embeddedDefaults, hasEmbeddedSilero, playEmbeddedSilero, stopEmbeddedSilero } from '@/core/voice/sileroEmbedded';
 import { voiceCatalog, type EmbeddedVoice } from '@/core/voice/voiceCatalog';
 import { colors, typography } from '@/theme/tokens';
@@ -203,6 +209,46 @@ export function ProfileVoiceSettings({
             <View style={[styles.knob, settings.bargeIn && styles.knobOn]} />
           </View>
         </Pressable>
+        {settings.bargeIn && (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.sensitivity}>
+              <Text style={styles.settingLabel}>Чувствительность перебивания</Text>
+              <Text style={styles.note}>Низкая — агент замолкает только на уверенную речь, шум и короткие звуки его не останавливают. Высокая — реагирует на любой тихий звук.</Text>
+              <View style={styles.voices}>
+                {(['low', 'medium', 'high'] as const satisfies readonly BargeInSensitivity[]).map((level) => {
+                  const selected = settings.bargeInSensitivity === level;
+                  return (
+                    <Pressable
+                      accessibilityRole="radio"
+                      accessibilityState={{ selected }}
+                      key={level}
+                      onPress={() => void onSettingsChange({ bargeInSensitivity: level }).catch(() => setError('Не удалось сохранить настройку.'))}
+                      style={[styles.voice, selected && styles.voiceSelected]}
+                    >
+                      <Text style={[styles.voiceText, selected && styles.voiceTextSelected]}>{bargeInSensitivityLabels[level]}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+            <View style={styles.divider} />
+            <Pressable
+              accessibilityRole="switch"
+              accessibilityState={{ checked: settings.communicationOutput }}
+              onPress={() => void onSettingsChange({ communicationOutput: !settings.communicationOutput }).catch(() => setError('Не удалось сохранить настройку.'))}
+              style={styles.setting}
+            >
+              <View style={styles.settingCopy}>
+                <Text style={styles.settingLabel}>Усиленное эхоподавление</Text>
+                <Text style={styles.note}>Экспериментально. Если агент перебивает сам себя на динамике, включите: звук пойдёт как в голосовом вызове. Громкость может регулироваться как громкость разговора.</Text>
+              </View>
+              <View style={[styles.toggle, settings.communicationOutput && styles.toggleOn]}>
+                <View style={[styles.knob, settings.communicationOutput && styles.knobOn]} />
+              </View>
+            </Pressable>
+          </>
+        )}
       </View>
       <Pressable accessibilityRole="button" onPress={() => router.push('/voice-lab' as Href)} style={styles.link}>
         <Text style={styles.linkText}>Voice Lab — сравнение голосов →</Text>
@@ -227,6 +273,7 @@ const styles = StyleSheet.create({
   card: { backgroundColor: colors.infoBackground, borderRadius: 16, paddingHorizontal: 16, paddingVertical: 4 },
   setting: { alignItems: 'center', flexDirection: 'row', gap: 12, paddingVertical: 12 },
   settingCopy: { flex: 1, gap: 4 },
+  sensitivity: { gap: 8, paddingVertical: 12 },
   settingLabel: { ...typography.button, color: colors.white },
   divider: { backgroundColor: colors.glassBorder, height: StyleSheet.hairlineWidth },
   stepper: { alignItems: 'center', flexDirection: 'row', gap: 6 },
