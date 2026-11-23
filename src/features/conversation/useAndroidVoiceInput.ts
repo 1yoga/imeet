@@ -154,6 +154,31 @@ export interface Timings {
 /** Короткие реакции в паузе внутри реплики: слова, а не междометия — синтез их произносит естественно. */
 const backchannels = ['Понятно.', 'Ага.', 'Так.', 'Интересно.', 'Вот как.', 'Да-да.'];
 let lastBackchannel = -1;
+/**
+ * Короткие реакции агента («Да-да», «Вот как») звучат из динамика, пока микрофон слушает, и распознаются как слова
+ * пользователя. Убираем из текста каждую сыгранную реакцию: последнее её вхождение, потому что реакция звучит
+ * после слов пользователя.
+ */
+function stripBackchannels(text: string, played: string[]) {
+  let result = text;
+  for (const phrase of played) {
+    const words = phrase.toLowerCase().match(/\p{L}+/gu);
+    if (!words) continue;
+    const pattern = new RegExp(`(^|[^\\p{L}])(${words.join('[\\s,.!?…\\-–—]+')})(?![\\p{L}])`, 'giu');
+    const last = [...result.matchAll(pattern)].pop();
+    if (last?.index === undefined) continue;
+    const start = last.index + last[1].length;
+    result = result.slice(0, start) + result.slice(start + last[2].length);
+  }
+  return result
+    .replace(/\s+([,.!?…])/g, '$1')
+    .replace(/([?!…])[.,]+/g, '$1')
+    .replace(/([,;:])\s*[.,]+/g, '$1')
+    .replace(/\s{2,}/g, ' ')
+    .replace(/^[\s,.!?…\-–—]+/, '')
+    .trim();
+}
+
 function pickBackchannel() {
   let index = Math.floor(Math.random() * backchannels.length);
   if (index === lastBackchannel) index = (index + 1) % backchannels.length;
@@ -215,6 +240,8 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   const [model, setModel] = useState<ModelState>({ phase: 'loading', message: 'Проверяем модели…' });
   const [modelRetry, setModelRetry] = useState(0);
   const [isActive, setActive] = useState(false);
+  // Растёт при каждом возвращении в приложение: экран по нему заново запускает прослушивание.
+  const [resumeKey, setResumeKey] = useState(0);
   const [feedback, setFeedback] = useState<Feedback>({ phase: 'idle' });
   const [transcript, setTranscript] = useState('');
   const [reply, setReply] = useState('');
@@ -338,11 +365,27 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
   useEffect(() => {
     if (!speech) return;
 
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined;
     const subscription = AppState.addEventListener('change', (state) => {
       // Android may pause the app while its microphone permission dialog is open.
       if (state === 'background' && !current.current?.requestingPermission) end();
+      if (state !== 'active') return;
+      clearTimeout(resumeTimer);
+      // Прерванный в фоне сеанс мог зависнуть на нативном вызове: даём ему мгновение завершиться,
+      // иначе бросаем его, освобождаем микрофон и даём экрану запустить прослушивание заново.
+      resumeTimer = setTimeout(() => {
+        const stale = current.current;
+        if (stale?.cancelled) {
+          current.current = null;
+          voiceInUse = false;
+          setActive(false);
+          setFeedback({ phase: 'idle' });
+        }
+        setResumeKey((value) => value + 1);
+      }, 600);
     });
     return () => {
+      clearTimeout(resumeTimer);
       subscription.remove();
       const session = current.current;
       current.current = null;
@@ -358,6 +401,8 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
 
   const start = async () => {
     if (!speech || !modelReady || current.current) return;
+    // В фоне микрофона нет: запуск повторится, когда приложение вернётся на передний план.
+    if (AppState.currentState !== 'active') return;
     // При переходе между экранами предыдущий ещё освобождает микрофон: ждём до 2 с.
     for (let i = 0; voiceInUse && i < 40; i++) await new Promise((resolve) => setTimeout(resolve, 50));
     if (voiceInUse || current.current) return;
@@ -432,6 +477,8 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         });
 
         const engine = tts;
+        // Какие реакции прозвучали, пока шла запись: их надо вычесть из распознанного текста.
+        const playedBackchannels: string[] = [];
         const pauseMs = Math.round(settingsRef.current.backchannelPauseSec * 1000);
         const backchannelOn = pauseMs > 0 && engine !== null && !mutedRef.current;
         // Короткая реакция в паузе: не перебивает, реплика продолжает записываться.
@@ -441,7 +488,9 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
             const now = Date.now();
             if (now - session.lastBackchannelAt < BACKCHANNEL_COOLDOWN_MS) return;
             session.lastBackchannelAt = now;
-            void engine.speak({ text: pickBackchannel(), locale: 'ru-RU' })
+            const phrase = pickBackchannel();
+            playedBackchannels.push(phrase);
+            void engine.speak({ text: phrase, locale: 'ru-RU' })
               .then((handle) => { session.backchannel = handle; })
               .catch(() => {});
           })
@@ -463,7 +512,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
             echoCancellation: backchannelOn || Boolean(continueFromMonitor),
             ...(continueFromMonitor ? { continueFromMonitor } : {}),
           });
-          text = heard.text.trim();
+          text = stripBackchannels(heard.text.trim(), playedBackchannels);
           asrTimings = (heard as { timings?: AsrTimings }).timings;
         } catch (error) {
           // Экран слушает постоянно: тишина — не ошибка, просто слушаем дальше.
@@ -737,6 +786,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
     model,
     retryModel,
     isActive,
+    resumeKey,
     phase,
     status,
     message,

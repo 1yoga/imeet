@@ -5,7 +5,6 @@ import { useFocusEffect } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-  Keyboard,
   Pressable,
   StyleSheet,
   Text,
@@ -57,8 +56,6 @@ export function AIConversationScreen() {
   const [focused, setFocused] = useState(true);
   const [textMode, setTextMode] = useState(false);
   const [draft, setDraft] = useState('');
-  // Высота клавиатуры над низом окна: в режиме edge-to-edge окно не сжимается, поле надо поднять самим.
-  const [keyboardOverlap, setKeyboardOverlap] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   // Всё содержимое экрана — цель размытия для отсчёта и диалогов, которые рисуются поверх.
   const blurTarget = useRef<View>(null);
@@ -66,17 +63,6 @@ export function AIConversationScreen() {
   const userName = useUserProfile((state) => state.name);
   const loadProfile = useUserProfile((state) => state.load);
   useEffect(() => { void loadProfile(); }, [loadProfile]);
-
-  useEffect(() => {
-    const show = Keyboard.addListener('keyboardDidShow', (event) => {
-      setKeyboardOverlap(Math.max(0, height - event.endCoordinates.screenY));
-    });
-    const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardOverlap(0));
-    return () => {
-      show.remove();
-      hide.remove();
-    };
-  }, [height]);
 
   useFocusEffect(useCallback(() => {
     setFocused(true);
@@ -99,7 +85,7 @@ export function AIConversationScreen() {
     if (voice.isActive || voice.phase !== 'idle' || voice.textBusy) return;
     if (introPlayed) void voice.start();
     else setCountdown((value) => value ?? 3);
-  }, [shouldListen, voice.isActive, voice.phase, voice.textBusy]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [shouldListen, voice.isActive, voice.phase, voice.textBusy, voice.resumeKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const beginListening = useCallback(() => {
     introPlayed = true;
@@ -122,11 +108,6 @@ export function AIConversationScreen() {
   const spaceAboveTabs = tabBarTop - 16 * scale;
   const actionsTop = Math.min(layout.actionsTop * scale, spaceAboveTabs - 96);
   const infoTop = actionsTop - 70;
-  // Поле ввода текста: на своём месте, а при открытой клавиатуре — над ней.
-  const composerHeight = 54 * scale;
-  const composerTop = textMode && keyboardOverlap > 0
-    ? Math.max(insets.top + 8, Math.min(infoTop, height - keyboardOverlap - composerHeight - 12))
-    : infoTop;
   const waveTop = layout.waveTop * scale;
   const waveHeight = layout.waveHeight * scale;
   const waveWidth = layout.waveWidth * scale;
@@ -215,13 +196,13 @@ export function AIConversationScreen() {
                   progress={banner.progress}
                   scale={scale}
                   text={banner.text}
-                  top={textMode ? composerTop - 64 * scale : infoTop}
+                  top={textMode ? infoTop - 64 * scale : infoTop}
                   width={contentWidth}
                 />
               )}
 
               {textMode && (
-                <View style={[styles.composer, { top: composerTop, width: contentWidth, minHeight: composerHeight }]}>
+                <View style={[styles.composer, { top: infoTop, width: contentWidth, minHeight: 54 * scale }]}>
                   <TextInput
                     accessibilityLabel="Сообщение"
                     autoFocus
@@ -260,10 +241,7 @@ export function AIConversationScreen() {
                     accessibilityHint="Микрофон выключится, можно писать текстом"
                     iconSource={noMicrophoneIcon}
                     label="Не могу говорить"
-                    onPress={() => {
-                      if (textMode) Keyboard.dismiss();
-                      setTextMode((value) => !value);
-                    }}
+                    onPress={() => setTextMode((value) => !value)}
                     variant={textMode ? 'secondary' : 'primary'}
                   />
                 </View>
