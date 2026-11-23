@@ -154,10 +154,6 @@ export interface Timings {
 /** Короткие реакции в паузе внутри реплики: слова, а не междометия — синтез их произносит естественно. */
 const backchannels = ['Понятно.', 'Ага.', 'Так.', 'Интересно.', 'Вот как.', 'Да-да.'];
 let lastBackchannel = -1;
-
-/** Шутка: если перебить Айдара, он возмущается. Для серьёзной сборки поставьте false. */
-const AIDAR_INTERRUPT_JOKE = true;
-const AIDAR_INTERRUPT_PHRASE = 'Хули ты перебиваешь, заебал, дослушай!';
 /**
  * Короткие реакции агента («Да-да», «Вот как») звучат из динамика, пока микрофон слушает, и распознаются как слова
  * пользователя. Убираем из текста каждую сыгранную реакцию: последнее её вхождение, потому что реакция звучит
@@ -502,15 +498,6 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
         const continueFromMonitor = bargeInMonitor?.id;
         bargeInMonitor = null;
         if (continueFromMonitor) update('user-speaking');
-        // Шутка: Айдар возмущается, когда его перебили; фраза вычитается из распознанного текста, как короткие реакции.
-        const joke = AIDAR_INTERRUPT_JOKE && Boolean(continueFromMonitor) && engine?.id === 'embedded:aidar'
-          && !session.cancelled && !mutedRef.current;
-        if (joke && engine) {
-          playedBackchannels.push(AIDAR_INTERRUPT_PHRASE);
-          void engine.speak({ text: AIDAR_INTERRUPT_PHRASE, locale: 'ru-RU' })
-            .then((handle) => { session.backchannel = handle; })
-            .catch(() => {});
-        }
 
         let text = '';
         // С @naslukh/speech-rn 0.3.0: реплика расшифровывается по ходу речи, в результате — замеры.
@@ -526,8 +513,6 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
             ...(continueFromMonitor ? { continueFromMonitor } : {}),
           });
           text = stripBackchannels(heard.text.trim(), playedBackchannels);
-          // Фраза Айдара могла распознаться искажённо: если от неё остались лишь обрывки, это не слова пользователя.
-          if (joke && looksLikeEcho(text, AIDAR_INTERRUPT_PHRASE)) text = '';
           asrTimings = (heard as { timings?: AsrTimings }).timings;
         } catch (error) {
           // Экран слушает постоянно: тишина — не ошибка, просто слушаем дальше.
