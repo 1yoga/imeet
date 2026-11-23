@@ -185,10 +185,10 @@ interface PreparedTts {
 /**
  * Голос ответа: встроенный Silero, выбранный в профиле; если моделей нет в сборке — системный TTS.
  */
-async function prepareTts(voiceId: string): Promise<PreparedTts> {
+async function prepareTts(voiceId: string, communicationOutput: () => boolean): Promise<PreparedTts> {
   const chosen = findVoice(voiceId);
   if (chosen?.kind === 'embedded' && hasEmbeddedSilero) {
-    const engine = createEmbeddedTtsEngine(chosen.speaker, () => settingsRef.current.communicationOutput);
+    const engine = createEmbeddedTtsEngine(chosen.speaker, communicationOutput);
     try {
       await engine.initialize();
       return { engine, voiceId, fallback: false };
@@ -393,7 +393,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       }
 
       stage = 'tts';
-      prepared = await prepareTts(voiceIdRef.current);
+      prepared = await prepareTts(voiceIdRef.current, () => settingsRef.current.communicationOutput);
       tts = prepared.engine;
       reportVoice(prepared);
       if (session.cancelled) return;
@@ -501,7 +501,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
 
         // Голос сменили в профиле — готовим озвучку заново.
         if (prepared && prepared.voiceId !== voiceIdRef.current) {
-          prepared = await prepareTts(voiceIdRef.current);
+          prepared = await prepareTts(voiceIdRef.current, () => settingsRef.current.communicationOutput);
           tts = prepared.engine;
           reportVoice(prepared);
           if (session.cancelled) return;
@@ -662,7 +662,7 @@ export function useAndroidVoiceInput(options: VoiceInputOptions = {}) {
       setFeedback({ phase: 'thinking' });
       const delayMs = settingsRef.current.replyDelaySec * 1000;
       if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
-      const ready = await prepareTts(voiceIdRef.current);
+      const ready = await prepareTts(voiceIdRef.current, () => settingsRef.current.communicationOutput);
       reportVoice(ready);
       const tts = ready.engine;
       if (!tts || mutedRef.current) return;
